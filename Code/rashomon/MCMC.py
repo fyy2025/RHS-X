@@ -67,7 +67,7 @@ def run_mcmc(score_s, RPS, log_alpha,
     # empirical posterior over unique states
     counts = defaultdict(int)
     for s in all_samples:
-        counts[AIS._state_signature(s)] += 1
+        counts[AIS.state_signature(s)] += 1
     total = sum(counts.values())
     post = {sig: cnt/total for sig, cnt in counts.items()}
     return {"samples": all_samples,
@@ -139,7 +139,7 @@ def estimate_policy_means_from_mcmc(
 def ais_posterior_over_signatures(ais_out) -> Dict[Tuple, float]:
     w_by_sig = defaultdict(float)
     for s, w in zip(ais_out.terminals, ais_out.normw):
-        w_by_sig[AIS._state_signature(s)] += float(w)
+        w_by_sig[AIS.state_signature(s)] += float(w)
     Z = sum(w_by_sig.values())
     return {sig: w/Z for sig, w in w_by_sig.items()} if Z>0 else {}
 
@@ -286,7 +286,7 @@ def plot_pred_vs_true(out,                         # output from summarize_polic
 
 def mcmc_unique_count(mcmc_res) -> int:
     """Number of unique states in mcmc_res['samples']."""
-    return len({ AIS._state_signature(s) for s in mcmc_res["samples"] })
+    return len({ AIS.state_signature(s) for s in mcmc_res["samples"] })
 
 def mcmc_unique_stats(mcmc_res, with_prob=True):
     """
@@ -296,7 +296,7 @@ def mcmc_unique_stats(mcmc_res, with_prob=True):
     counts = defaultdict(int)
     samples = mcmc_res["samples"]
     for s in samples:
-        counts[AIS._state_signature(s)] += 1
+        counts[AIS.state_signature(s)] += 1
     total = float(len(samples)) or 1.0
     if with_prob:
         return {sig: {"count": c, "prob": c/total} for sig, c in counts.items()}
