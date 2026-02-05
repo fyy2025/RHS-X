@@ -913,3 +913,177 @@ def pilot_adaptive_ladder(
         ladder.append(beta1)
 
     return np.asarray(ladder, float), ess_ratios
+
+
+###
+# 7) Pilot run to decide temperature ladder
+###
+
+import itertools
+# ---- Assumed available in your codebase -------------------------------------
+# class ProfilePart:   # ProfilePart(cov_ids: tuple|None, B: np.ndarray|list|None)
+#     ...
+# def assemble_sigma_full_for_profile(pp, R_per: np.ndarray) -> np.ndarray: ...
+# from rashomon.loss import compute_Q   # the repo's loss.compute_Q
+
+State = List["ProfilePart"]
+
+# ---------- 1) enumerate all compact B for a single profile ------------------
+
+def _all_bitrows_for_arm(c: int):
+    """All 0/1 bit rows of length c as float arrays (empty if c==0)."""
+    if c <= 0:
+        return [np.zeros((0,), float)]
+    for bits in itertools.product((0.0, 1.0), repeat=c):
+        yield np.asarray(bits, float)
+
+def enumerate_compact_B_for_profile(cov_ids: Tuple[int, ...], R_per: np.ndarray):
+    """
+    Generate every compact partition matrix B for a given profile:
+      - one row per active arm (in cov_ids order),
+      - each row is a 0/1 vector for that arm's interior cut positions (length R_m-2),
+      - returned as a 2D ndarray padded with +inf to equal width,
+        or None if the profile has no interior bits.
+    """
+    cov = np.asarray(cov_ids, int)
+    C_per = np.maximum(np.asarray(R_per, int) - 2, 0)
+    active = np.flatnonzero(cov == 1)
+
+    # For each active arm m, list all possible bit-rows length C_per[m]
+    per_arm_rows = []
+    for m in active:
+        c = int(C_per[m])
+        rows_m = list(_all_bitrows_for_arm(c))  # each is 1D float array
+        # if c==0, rows_m == [array([],float)] meaning "no row content" for this arm
+        per_arm_rows.append(rows_m)
+
+    if not per_arm_rows:
+        # No active arms -> no interior bits -> only partition is None
+        yield None
+        return
+
+    # Cartesian product across active arms; pad to rectangular with +inf
+    for choice in itertools.product(*per_arm_rows):
+        # Filter out empty rows (from arms with c==0)
+        rows = [r for r in choice if r.size > 0]
+        if not rows:
+            # All active arms had c==0 → no interior bits
+            yield None
+            continue
+        W = max(r.size for r in rows)
+        padded = [
+            (r if r.size == W else np.pad(r, (0, W - r.size), constant_values=np.inf))
+            for r in rows
+        ]
+        yield np.vstack(padded).astype(float)
+
+# ---------- 2) enumerate all global states over all profiles -----------------
+
+def enumerate_all_states(profiles: List[Tuple[int, ...]], R_per: np.ndarray):
+    """
+    Yield every global State (list[ProfilePart]), taking the Cartesian product
+    over all profiles’ compact B choices.
+    """
+    # For each profile, precompute the list of all compact B (including None)
+    per_profile_B_lists = [
+        list(enumerate_compact_B_for_profile(cov, R_per))
+        for cov in profiles
+    ]
+
+    for combo in itertools.product(*per_profile_B_lists):
+        state = [ProfilePart(cov_ids=tuple(profiles[k]), B=combo[k]) for k in range(len(profiles))]
+        yield state
+
+# ---------- 3) precompute per-profile slices (D_k, y_k, policies_k, pm_k) ----
+
+def prepare_profile_slices(
+    policies,                   # global policies list (length P)
+    policy_means,               # np.ndarray [P,2] = [sum_y, count]
+    prof_idx_of_policy,         # length-P array: policy_id -> profile index k
+    D, y                        # global D, y (D's first col = policy id for lookups)
+):
+    """
+    Returns per-profile slices dicts keyed by k:
+      - 'idxs': global policy indices belonging to profile k
+      - 'policies': local list of policy objects
+      - 'pm': local policy_means slice [n_k,2]
+      - 'D': rows of D with those policies
+      - 'y': matching y rows
+    """
+    P = len(policies)
+    K = int(np.max(prof_idx_of_policy)) + 1
+    prof_to_global = [[] for _ in range(K)]
+    for pid in range(P):
+        prof_to_global[int(prof_idx_of_policy[pid])].append(pid)
+
+    slices = []
+    for k in range(K):
+        idxs = prof_to_global[k]
+        pol_k = [policies[i] for i in idxs]
+        pm_k = policy_means[np.array(idxs, int), :] if idxs else np.zeros((0,2))
+        # mask rows in D/y for policies in this profile
+        # (Assumes D[:,0] are integer policy IDs in 0..P-1)
+        mask = np.isin(D[:, 0].astype(int), np.array(idxs, int))
+        D_k = D[mask]
+        y_k = y[mask]
+        slices.append({"idxs": idxs, "policies": pol_k, "pm": pm_k, "D": D_k, "y": y_k})
+    return slices
+
+# ---------- 4) compute global loss for a given state -------------------------
+
+# def compute_global_loss_for_state(
+#     state: State,
+#     slices,                     # output of prepare_profile_slices()
+#     R_per: np.ndarray,
+#     reg: float = 1.0,
+#     normalize: int = 0,
+#     lattice_edges=None          # pass None to let loss/predict compute internally
+# ) -> float:
+#     """
+#     Sum of per-profile losses using repo's loss.compute_Q.
+#     """
+#     total = 0.0
+#     R_per = np.asarray(R_per, int)
+#     for k, pp in enumerate(state):
+#         sk = assemble_sigma_full_for_profile(pp, R_per)  # full σ for profile k
+#         sl = slices[k]
+#         if sl["pm"].shape[0] == 0:
+#             continue  # no data/policies in this profile; contributes 0
+#         Qk = compute_Q(
+#             D=sl["D"], y=sl["y"], sigma=sk,
+#             policies=sl["policies"], policy_means=sl["pm"],
+#             reg=reg, normalize=normalize, lattice_edges=lattice_edges
+#         )
+#         total += float(Qk)
+#     return total
+
+# ---------- 5) enumerate *and* score everything (WARNING: exponential) -------
+
+def enumerate_all_states_and_losses(
+    profiles: List[Tuple[int, ...]],
+    M,
+    R,
+    policies,
+    policy_means,
+    prof_idx_of_policy,
+    D, y,
+    reg: float = 1.0,
+    normalize: int = 0,
+    lattice_edges=None,
+    max_states: int | None = None   # optional cap to avoid explosion
+):
+    """
+    Enumerate every global partition (state) and compute its total loss.
+    Returns a list of tuples: (state, loss).
+    WARNING: the count grows as ∏_k 2^{C_k}; use `max_states` to cap if needed.
+    """
+    slices = prepare_profile_slices(policies, policy_means, prof_idx_of_policy, D, y)
+    out = []
+    ctr = 0
+    for state in enumerate_all_states(profiles, R):
+        L = global_loss_raw(state, D, y, policies, policy_means, prof_idx_of_policy, M, R, reg=reg, normalize=normalize, lattice_edges=lattice_edges)
+        out.append((state, L))
+        ctr += 1
+        if (max_states is not None) and (ctr >= max_states):
+            break
+    return out

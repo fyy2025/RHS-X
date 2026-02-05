@@ -148,7 +148,7 @@ def tv_distance(p: Dict[Tuple,float], q: Dict[Tuple,float]) -> float:
     return 0.5 * sum(abs(p.get(k,0.0) - q.get(k,0.0)) for k in keys)
 
 def policy_means_matrix_from_mcmc(
-    mcmc_res,
+    samples,                      # mcmc_res["samples"]
     policies,                     # global list/array of policies (length P)
     policy_means,                 # np.ndarray [P,2] = [sum_y, count]
     prof_idx_of_policy,           # length-P array: policy_id -> profile k
@@ -161,7 +161,7 @@ def policy_means_matrix_from_mcmc(
     Build a DataFrame of per-sample predicted means per policy.
     Shape: (num_samples, P)
     """
-    samples = mcmc_res["samples"]
+    samples = samples
     S = len(samples)
     P = len(policies)
     if S == 0:
@@ -263,8 +263,8 @@ def plot_pred_vs_true(out,                         # output from summarize_polic
     ax.plot([lo, hi], [lo, hi], color=line_color, linestyle='-')
 
     # Labels & style
-    ax.set_xlabel("True y")
-    ax.set_ylabel("Posterior predictive of y")
+    ax.set_xlabel("True data generating beta")
+    ax.set_ylabel("Estimates of y")
     ax.set_aspect('equal', adjustable='box')
     ax.grid(True, linewidth=0.3, alpha=0.5)
     ax.set_xlim(lo, hi)
