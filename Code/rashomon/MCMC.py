@@ -278,9 +278,204 @@ def plot_pred_vs_true(out,                         # output from summarize_polic
     plt.tight_layout()
     return fig, ax
 
-# Example:
-# fig, ax = plot_pred_vs_true(y_true, yM, yL, yU)
-# plt.show()
+# Now instead of computing posterior mean, use Bayesian framework, start with normal-InvGamma prior 
+# and sample from posterior distribution to do the plot
+
+def nig_posterior_params(n, sum_y, sumsq_y, mu0=0.0, kappa0=1.0, alpha0=0.0, beta0=-1.0):
+    """
+    Normal-Inverse-Gamma prior:
+      sigma2 ~ InvGamma(alpha0, beta0)
+      mu | sigma2 ~ Normal(mu0, sigma2/kappa0)
+
+    Given sufficient stats in a pool:
+      n, sum_y, sumsq_y = sum(y^2)
+
+    Returns posterior params (mu_n, kappa_n, alpha_n, beta_n).
+    """
+    n = int(n)
+    if n <= 0:
+        # no data: posterior = prior
+        return float(mu0), float(kappa0), float(alpha0), float(beta0)
+
+    ybar = sum_y / n
+    sse = sumsq_y - n * (ybar ** 2)  # sum (y - ybar)^2
+
+    kappa_n = kappa0 + n
+    mu_n = (kappa0 * mu0 + n * ybar) / kappa_n
+    alpha_n = alpha0 + 0.5 * n
+    beta_n = beta0 + 0.5 * sse + 0.5 * (kappa0 * n / kappa_n) * ((ybar - mu0) ** 2)
+
+    return float(mu_n), float(kappa_n), float(alpha_n), float(beta_n)
+
+def sample_mu_from_nig(mu_n, kappa_n, alpha_n, beta_n, rng, size=1):
+    """
+    Sample mu marginally by:
+      sigma2 ~ InvGamma(alpha_n, beta_n)
+      mu | sigma2 ~ Normal(mu_n, sigma2 / kappa_n)
+
+    Returns array of shape (size,).
+    """
+    # InvGamma(alpha, beta): sample via Gamma(alpha, scale=1/beta) then invert
+    g = rng.gamma(shape=alpha_n, scale=1.0 / beta_n, size=size)
+    sigma2 = 1.0 / g
+    mu = rng.normal(loc=mu_n, scale=np.sqrt(sigma2 / kappa_n), size=size)
+    return mu
+
+def policy_mean_draws_from_mcmc_nig(
+    mcmc_res,
+    D, y,
+    policies,
+    prof_idx_of_policy,
+    R_per,
+    M,
+    lattice_edges=None,
+    n_draws_per_state=3,
+    mu0=0.0, kappa0=1.0, alpha0=0.0, beta0=-1.0,
+    seed=0,
+):
+    """
+    Returns:
+      draws: np.ndarray of shape (S * n_draws_per_state, P)
+             Each row is one posterior draw of mean for every policy.
+
+    This includes partition uncertainty (MCMC) + within-pool (NIG) uncertainty.
+    """
+    rng = np.random.default_rng(seed)
+
+    samples = mcmc_res["samples"]
+    S = len(samples)
+    P = len(policies)
+    if S == 0:
+        return np.zeros((0, P), float)
+
+    # y to 1D
+    y1 = y[:, 0] if (isinstance(y, np.ndarray) and y.ndim == 2) else np.asarray(y).ravel()
+    pid_all = D[:, 0].astype(int)
+
+    K = int(np.max(prof_idx_of_policy)) + 1
+
+    # Profile -> list of global policy ids (fixed order defines local indices)
+    prof_to_global = [[] for _ in range(K)]
+    for pid in range(P):
+        prof_to_global[int(prof_idx_of_policy[pid])].append(pid)
+
+    prof_policies = [[policies[i] for i in idxs] for idxs in prof_to_global]
+    prof_pid_to_local = []
+    for k in range(K):
+        idxs = prof_to_global[k]
+        prof_pid_to_local.append({pid: j for j, pid in enumerate(idxs)})
+
+    # Also split data indices by profile (fast masks)
+    prof_data_idx = []
+    for k in range(K):
+        idxs = np.array(prof_to_global[k], dtype=int)
+        if idxs.size == 0:
+            prof_data_idx.append(np.array([], dtype=int))
+            continue
+        mask = np.isin(pid_all, idxs)
+        prof_data_idx.append(np.flatnonzero(mask))
+
+    # output draws
+    out = np.zeros((S * n_draws_per_state, P), float)
+    row = 0
+
+    for s_idx, state in enumerate(samples):
+        # For each profile, build pools & also pool sufficient stats
+        per_prof_poolmap = [None] * K
+        per_prof_poolstats = [None] * K
+        per_prof_npools = [0] * K
+
+        for k in range(K):
+            idxs = prof_to_global[k]
+            if not idxs:
+                continue
+
+            sigma_full_k = AIS.assemble_sigma_full_for_profile(state[k], M, np.asarray(R_per, int))
+            pi_pools_k, pi_policies_k = extract_pools.extract_pools(prof_policies[k], sigma_full_k, lattice_edges)
+            n_pools = len(pi_pools_k)
+            per_prof_npools[k] = n_pools
+            per_prof_poolmap[k] = pi_policies_k  # local_idx -> pool_id
+
+            # compute sufficient stats by scanning the data rows in this profile
+            n = np.zeros(n_pools, int)
+            sy = np.zeros(n_pools, float)
+            sy2 = np.zeros(n_pools, float)
+
+            didx = prof_data_idx[k]
+            pid_k = pid_all[didx]
+            y_k = y1[didx]
+
+            pid2loc = prof_pid_to_local[k]
+            for pid_obs, y_obs in zip(pid_k, y_k):
+                loc = pid2loc[int(pid_obs)]               # local index of this policy in prof_policies[k]
+                pool = pi_policies_k[loc]                 # pool id
+                n[pool] += 1
+                sy[pool] += float(y_obs)
+                sy2[pool] += float(y_obs) ** 2
+
+            per_prof_poolstats[k] = (n, sy, sy2)
+
+        # Now draw pool means and assign to policies
+        for _ in range(n_draws_per_state):
+            mu_draw = np.zeros(P, float)
+
+            for k in range(K):
+                idxs = prof_to_global[k]
+                if not idxs:
+                    continue
+                pi_policies_k = per_prof_poolmap[k]
+                n, sy, sy2 = per_prof_poolstats[k]
+                n_pools = per_prof_npools[k]
+
+                # sample a mean for each pool
+                pool_mu = np.zeros(n_pools, float)
+                for j in range(n_pools):
+                    mu_n, k_n, a_n, b_n = nig_posterior_params(
+                        n[j], sy[j], sy2[j],
+                        mu0=mu0, kappa0=kappa0, alpha0=alpha0, beta0=beta0
+                    )
+                    pool_mu[j] = sample_mu_from_nig(mu_n, k_n, a_n, b_n, rng, size=1)[0]
+
+                # assign to each policy in this profile
+                for local_idx, pid in enumerate(idxs):
+                    pool_id = pi_policies_k[local_idx]
+                    mu_draw[pid] = pool_mu[pool_id]
+
+            out[row, :] = mu_draw
+            row += 1
+
+    return out
+
+def summarize_policy_draws(draws, qs=(0.1, 0.5, 0.9)):
+    """
+    draws: (Ndraw, P)
+    Returns dict with mean and quantiles per policy.
+    """
+    mean = draws.mean(axis=0)
+    quants = {q: np.quantile(draws, q, axis=0) for q in qs}
+    return {"mean": mean, "quantiles": quants}
+
+def plot_policy_spread(policy_means, summ, q_low=0.1, q_high=0.9, title="Posterior policy means (MCMC + NIG)"):
+    """
+    Scatter + vertical intervals vs true mu.
+    """
+    true_mu = policy_means[:,0] / policy_means[:,1]
+    mean = summ["mean"]
+    lo = summ["quantiles"][q_low]
+    hi = summ["quantiles"][q_high]
+
+    x = np.asarray(true_mu).ravel()
+    y = mean
+
+    plt.figure()
+    plt.errorbar(x, y, yerr=[y - lo, hi - y], fmt='o', capsize=2)
+    mn = min(x.min(), y.min(), lo.min())
+    mx = max(x.max(), y.max(), hi.max())
+    plt.plot([mn, mx], [mn, mx], linestyle='--')
+    plt.xlabel("True policy mean")
+    plt.ylabel("Posterior mean (with interval)")
+    plt.title(title)
+    plt.show()
 
 
 
