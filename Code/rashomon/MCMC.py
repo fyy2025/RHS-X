@@ -1,4 +1,5 @@
 from rashomon import AIS, extract_pools, loss
+from rashomon.AIS import State
 import math, random, numpy as np, pandas as pd
 import matplotlib.pyplot as plt
 from collections import defaultdict
@@ -588,3 +589,122 @@ def load_mcmc_res(path):
     else:
         with open(path, "rb") as f:
             return pickle.load(f)
+
+
+##Dynamically streaming trial:
+import json, math, random, numpy as np
+from typing import List, Optional, Callable
+
+def _state_to_jsonable(state):
+    """Convert State -> JSON-safe (replace inf with 'inf')."""
+    out = []
+    for pp in state:
+        cov = None if pp.cov_ids is None else list(pp.cov_ids)  # tuple -> list for JSON
+        if pp.B is None:
+            B = None
+        else:
+            A = np.asarray(pp.B, float)
+            B_list = A.tolist()
+            # JSON doesn't support Infinity; store as "inf"
+            def fix(v):
+                if isinstance(v, float) and (math.isinf(v) or math.isnan(v)):
+                    return "inf" if math.isinf(v) else "nan"
+                return v
+            if isinstance(B_list[0], list):  # 2D
+                B = [[fix(x) for x in row] for row in B_list]
+            else:  # 1D
+                B = [fix(x) for x in B_list]
+        out.append({"cov_ids": cov, "B": B})
+    return out
+
+def _jsonable_to_state(obj):
+    """Optional: convert JSON-safe back to State (requires ProfilePart in scope)."""
+    out=[]
+    for d in obj:
+        cov = None if d["cov_ids"] is None else tuple(d["cov_ids"])
+        B = d["B"]
+        if B is None:
+            arr = None
+        else:
+            # convert "inf" back to np.inf
+            def unfix(x):
+                if x == "inf": return np.inf
+                if x == "nan": return np.nan
+                return x
+            if isinstance(B[0], list):
+                arr = np.array([[unfix(x) for x in row] for row in B], float)
+            else:
+                arr = np.array([unfix(x) for x in B], float)
+        out.append(AIS.ProfilePart(cov_ids=cov, B=arr))
+    return out
+
+def mh_step_true_posterior(x: State, score_s: Callable[[State], float], min_len=1):
+    """Same MH step you used: uniform over neighbors with degree correction."""
+    N_cur = [n for n in AIS.state_neighbors_ubs(x, min_len=min_len) if not AIS.states_equal(n, x)]
+    if not N_cur:
+        return x, 0
+    prop = random.choice(N_cur)
+    N_prop = [n for n in AIS.state_neighbors_ubs(prop, min_len=min_len) if not AIS.states_equal(n, prop)]
+    lcur = math.log(max(1e-300, score_s(x)))
+    lprop = math.log(max(1e-300, score_s(prop)))
+    logr = (lprop - lcur) + math.log(max(1, len(N_cur))) - math.log(max(1, len(N_prop)))
+    if math.log(random.random() + 1e-300) < min(0.0, logr):
+        return prop, 1
+    return x, 0
+
+def run_mcmc_streaming(
+    RPS: List, 
+    log_alpha: List[float],
+    score_s: Callable[[State], float],
+    steps: int = 50000,
+    burnin: int = 5000,
+    thin: int = 5,
+    min_len: int = 1,
+    seed: Optional[int] = 0,
+    out_jsonl: str = "mcmc_samples.jsonl",
+    progress_json: str = "mcmc_progress.json"
+):
+    """
+    Runs MH and appends every `thin`-th post-burn-in sample to out_jsonl immediately.
+    """
+    if seed is not None:
+        np.random.seed(seed); random.seed(seed)
+
+    rng = np.random.default_rng(seed)
+
+    x0 = init_from_RPS(RPS, log_alpha, rng)  # start in RPS (loss-weighted)
+    x = x0
+    accepts = 0
+    kept = 0
+
+    # open in append mode so you can resume / tail the file
+    with open(out_jsonl, "a", encoding="utf-8") as f:
+        for t in range(steps):
+            x, acc = mh_step_true_posterior(x, score_s, min_len=min_len)
+            accepts += acc
+
+            # keep sample on schedule
+            if t >= burnin and ((t - burnin) % thin == 0):
+                rec = {
+                    "iter": t,
+                    "state": _state_to_jsonable(x),
+                    "log_score": float(math.log(max(1e-300, score_s(x))))
+                }
+                f.write(json.dumps(rec) + "\n")
+                f.flush()  # ensures it’s on disk right away
+                kept += 1
+
+            # update progress every so often (e.g., every 200 iters)
+            if (t % 200) == 0:
+                prog = {
+                    "iter": t,
+                    "accept_rate_so_far": accepts / max(1, t+1),
+                    "kept_samples": kept,
+                    "burnin": burnin,
+                    "thin": thin,
+                    "steps": steps
+                }
+                with open(progress_json, "w", encoding="utf-8") as g:
+                    json.dump(prog, g)
+
+    return {"accept_rate": accepts / max(1, steps), "kept": kept, "out_jsonl": out_jsonl}
