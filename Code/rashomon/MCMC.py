@@ -708,3 +708,29 @@ def run_mcmc_streaming(
                     json.dump(prog, g)
 
     return {"accept_rate": accepts / max(1, steps), "kept": kept, "out_jsonl": out_jsonl}
+
+def load_mcmc_res_from_jsonl(jsonl_path: str):
+    """
+    Read a streaming MCMC JSONL file (written by run_mcmc_streaming) and return:
+      mcmc_res = {"samples": [State,...], "iters": np.array, "log_score": np.array}
+    where each State is a list[ProfilePart].
+    Requires: _jsonable_to_state(...) and ProfilePart in scope.
+    """
+    samples = []
+    iters = []
+    log_score = []
+
+    with open(jsonl_path, "r", encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+            samples.append(_jsonable_to_state(rec["state"]))
+            iters.append(int(rec.get("iter", -1)))
+            log_score.append(float(rec.get("log_score", np.nan)))
+
+    return {
+        "samples": samples,
+        "iters": np.asarray(iters, dtype=int),
+        "log_score": np.asarray(log_score, dtype=float),
+    }
