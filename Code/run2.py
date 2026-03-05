@@ -8,8 +8,8 @@ from rashomon import hasse, extract_pools, loss, aggregate, AIS, MCMC
 
 def main():
 
-    N_ITER = 1000
-    N_BURN = 500
+    N_ITER = 300000
+    N_BURN = 50000
     N_THIN = 10
 
     M = 3
