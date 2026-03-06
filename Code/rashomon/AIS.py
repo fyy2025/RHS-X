@@ -1,7 +1,7 @@
 from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Callable, List, Tuple, Optional, List, Sequence, Set, Dict, Union
+from typing import Callable, List, Tuple, Optional, List, Sequence, Set, Dict, Union, Any
 import numpy as np
 import math, random
 import statsmodels.api as sm
@@ -648,6 +648,78 @@ def run_ais_state(anchors: List[State],
 
         terminals.append(_copy_state(x))
         logw[p]=lw
+
+    m=float(np.max(logw)); w=np.exp(logw-m)
+    return AISOutput(terminals, logw, w/w.sum(), ladder)
+
+
+@dataclass
+class AISResult:
+    states: List[Any]
+    logw: List[float]
+
+import os
+import json
+from rashomon import MCMC
+
+def append_jsonl(path: str, record: Dict[str, Any]) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def run_ais_state_streaming(
+    anchors: List[State],
+    score_s: Callable[[State], float],
+    cfg: AISConfig = AISConfig(),
+    RPS: Optional[List[State]] = None,
+    R_per: Optional[np.ndarray] = None,
+    eps1: float = 0.05, eps2: float = 0.25,
+    out_jsonl: str = "AIS_samples.jsonl",
+    tau_init: float = 1.0,
+    keep_in_memory: bool = True
+) -> Dict[str, List[Any]]:
+    log_alpha = [score_s(A) for A in anchors]  
+    # NEW p0 built from RPS using existing log_alpha (weighted S0)
+    if RPS is None or R_per is None:
+        raise ValueError("Provide RPS and R_per for the distance-bucket p0.")
+    buckets = make_p0_buckets_weighted_S0(RPS, np.asarray(R_per,int), log_alpha, eps1=eps1, eps2=eps2, min_len=cfg.min_len)
+    log_p0 = lambda z: log_p0_distance_weighted_S0(z, buckets)     
+
+    ladder = make_ladder(cfg.n_levels)
+
+    terminals=[]; logw=np.zeros(cfg.n_paths,float)
+
+    with open(out_jsonl, "a", encoding="utf-8") as f:
+        for p in range(cfg.n_paths):
+            # initial x from RPS by loss weights
+            x = sample_p0(buckets,RPS,R_per)
+            lw = 0.0                                                     # keep simple; add init-correction if you want
+
+            beta_prev = ladder[0]
+            for beta_cur in ladder[1:]:
+                # AIS weight increment
+                lq = log_p0(x)
+                lp = math.log(max(1e-300, score_s(x)))
+                lw += (beta_cur - beta_prev) * (lp - lq) # move to next ladder, update weight
+                # MH moves at level beta_cur
+                for _ in range(cfg.moves_per_level):
+                    x = mh_step_state_uniform_neighbors(x, beta_cur, log_p0, score_s, min_len=cfg.min_len)
+                    # proposal step, moves_per_level steps of MH movements
+                beta_prev = beta_cur
+
+            rec = {
+                    "iter": p,
+                    "state": MCMC._state_to_jsonable(x),
+                    "unnormalized_log_weight": lw
+                }
+            f.write(json.dumps(rec) + "\n")
+            f.flush()  # ensures it’s on disk right away
+
+            terminals.append(_copy_state(x))
+            logw[p]=lw
 
     m=float(np.max(logw)); w=np.exp(logw-m)
     return AISOutput(terminals, logw, w/w.sum(), ladder)

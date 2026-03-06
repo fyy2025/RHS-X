@@ -136,6 +136,16 @@ score_s = AIS.make_score_s_expneg_raw(
     prior_logprob=lambda state: 0.0
 )
 
+cfg = AIS.AISConfig(n_paths=500, n_levels=5, moves_per_level=5, min_len=1, seed=2)
+out_500 = AIS.run_ais_state_streaming(
+    anchors=R_set,          # not used by q0, but you may keep for consistency
+    score_s=score_s,        # returns exp(-loss(state)) or similar
+    cfg=cfg,
+    RPS=RPS_states,              # your Rashomon partitions as a list of State
+    R_per=R,  # levels per arm (includes control)
+    eps1=0.05, eps2=0.25
+)
+
 log_alpha = [score_s(A) for A in anchors]
 res = MCMC.run_mcmc_streaming(RPS_states, log_alpha, score_s, steps=300000, burnin=5000, thin=5,
                          out_jsonl="mcmc_run1.jsonl", progress_json="mcmc_run1_progress.json")
