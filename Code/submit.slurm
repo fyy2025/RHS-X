@@ -2,14 +2,14 @@
 
 #SBATCH --job-name=rashomon_mcmc
 #SBATCH --account=escience
-#SBATCH --partition=cpu-g2
+#SBATCH --partition=cpu-g2-mem2x
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --mem=16G
 #SBATCH --time=40:00:00
 #SBATCH --output=log/%x_%j.out
 #SBATCH --error=log/%x_%j.err
-#SBATCH --mail-type=ALL
+#SBATCH --mail-type=FAIL,KILL,END
 #SBATCH --mail-user=span18@uw.edu
 
 set -euo pipefail
