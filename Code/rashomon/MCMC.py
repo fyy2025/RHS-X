@@ -17,6 +17,14 @@ def init_from_RPS(RPS: List, log_alpha: List[float], rng: np.random.Generator) -
     p = AIS._softmax_logalpha(log_alpha)
     return AIS._copy_state(RPS[rng.choice(len(RPS), p=p)])
 
+def init_from_RPS_batch(RPS, log_alpha, batch_N, rng_seed=None):
+    if rng_seed is not None:
+        np.random.seed(rng_seed); random.seed(rng_seed)
+    # softmax over log_alpha
+    z = np.asarray(log_alpha, float); m = float(z.max()); p = np.exp(z-m); p /= p.sum()
+    idx = np.random.choice(len(RPS), size=batch_N, p=p)
+    return [AIS._copy_state(RPS[i]) for i in idx]
+
 # --- one MH step targeting the true posterior p(x) ∝ score_s(x) ---
 def mh_step_true_posterior(x, score_s, min_len=1):
     N_cur = [n for n in AIS.state_neighbors_ubs(x, min_len=min_len) if not AIS.states_equal(n, x)]

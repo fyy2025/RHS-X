@@ -1028,7 +1028,7 @@ def _normalize_logw(logw: np.ndarray) -> np.ndarray:
 
 def pilot_adaptive_ladder(
     init_sampler: Callable[[int], List],         # returns a list of N initial States ~ q0 (or your RPS-init)
-    log_q0: Callable[[List], float],             # log q0(x)
+    log_p0: Callable[[List], float],             # log q0(x)
     score_s: Callable[[List], float],            # unnormalized target (positive), log taken inside
     N: int = 512,                                # probe particle count
     ess_target: float = 0.80,                    # target ESS ratio per step (0.7–0.9 typical)
@@ -1060,7 +1060,7 @@ def pilot_adaptive_ladder(
     delta = initial_delta
 
     # Precompute logp−logq0 for efficiency (updated only after moves)
-    logp_minus_logq = np.array([_logp(x, score_s) - float(log_q0(x)) for x in X], dtype=float)
+    logp_minus_logq = np.array([_logp(x, score_s) - float(log_p0(x)) for x in X], dtype=float)
 
     while beta < beta1 - 1e-12 and len(ladder) < max_levels:
         beta_try = min(beta + delta, beta1)
@@ -1091,11 +1091,11 @@ def pilot_adaptive_ladder(
                 xi = X[i]
                 for _ in range(moves_per_probe):
                     xi = mh_step_state_uniform_neighbors(
-                        xi, t=beta_try, log_q0=log_q0, score_s=score_s, min_len=min_len
+                        xi, t=beta_try, log_p0=log_p0, score_s=score_s, min_len=min_len
                     )
                 X[i] = xi
             # refresh logp−logq0 after moves
-            logp_minus_logq = np.array([_logp(x, score_s) - float(log_q0(x)) for x in X], dtype=float)
+            logp_minus_logq = np.array([_logp(x, score_s) - float(log_p0(x)) for x in X], dtype=float)
 
         # 6) advance
         beta = beta_try
