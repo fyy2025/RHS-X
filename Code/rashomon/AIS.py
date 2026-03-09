@@ -452,7 +452,7 @@ def assemble_sigma_full_for_profile(
         # trim/pad the source row to 'need', then place into Sigma[m, :need]
         src = row_arr.ravel()
         if src.size < need:
-            src = np.pad(src, (0, need - src.size), mode="constant", constant_values=0.0)
+            src = np.pad(src, (0, need - src.size), mode="constant", constant_values=1.0)
         elif src.size > need:
             src = src[:need]
         Sigma[m, :need] = src
@@ -491,6 +491,7 @@ def global_loss_raw(
 ) -> float:
     """Compute the loss for one global partition"""
     # coerce arrays
+    normalize = D.shape[0]
     D_arr = np.asarray(D);  y_arr = np.asarray(y)
     if D_arr.ndim == 1: D_arr = D_arr.reshape(-1, 1)
     if y_arr.ndim == 1: y_arr = y_arr.reshape(-1, 1)
@@ -524,13 +525,22 @@ def global_loss_raw(
         D_k[:, 0] = local_map[D_k[:, 0].astype(int)]
 
         policies_k = [policies[i] for i in pol_ids]
-        pm_k = np.asarray(policy_means)[pol_ids, :]
+        # pm_k = np.asarray(policy_means)[pol_ids, :]
+        pm_k = loss.compute_policy_means(D_k, y_k, len(policies_k))
 
         # Expand per-profile candidate to full M rows for compute_Q
         Sigma_k_full = assemble_sigma_full_for_profile(part_k, M, R)
 
         if Sigma_k_full is None:
             Q_k = _compute_Q_none_mean(y_k, reg=reg, normalize=normalize)
+            # print(Q_k)
+            # Sigma_k_full = np.full((M,np.max(R)-2), np.inf, float)
+            # Q_k = float(_compute_Q(
+            #     D=D_k, y=y_k, sigma=Sigma_k_full,
+            #     policies=policies_k, policy_means=pm_k,
+            #     reg=reg, normalize=normalize, lattice_edges=lattice_edges
+            # ))
+            # print(Q_k)
         else:
             Q_k = float(_compute_Q(
                 D=D_k, y=y_k, sigma=Sigma_k_full,
@@ -538,8 +548,128 @@ def global_loss_raw(
                 reg=reg, normalize=normalize, lattice_edges=lattice_edges
             ))
         total += Q_k
-
+        # print(Q_k)
     return total
+
+def global_loss_raw2(
+    state,                      # list[ProfilePart or raw sigma/None], length = num_profiles
+    D, y,                       # D: (N,1) global policy ids; y: (N,) or (N,1)
+    policies,                   # list of ALL policies (len = num_policies)
+    policy_means,               # (num_policies, 2)  (kept for signature compatibility; NOT used)
+    prof_idx_of_policy,         # np.ndarray(len=num_policies): profile index for each policy
+    M: int,                     # number of features/arms
+    R,
+    reg: float = 1.0,
+    normalize: int = 0,
+    lattice_edges=None,         # can be None or a GLOBAL edge list; we rebuild per-profile if possible
+) -> float:
+    """
+    Repo-faithful global loss:
+      total = sum_k compute_Q(D_k_local, y_k, sigma_full_k, policies_k, policy_means_k, ...)
+    Key differences vs earlier versions:
+      - policy_means_k is recomputed per profile using loss.compute_policy_means (repo process)
+      - degenerate sigma is represented by an all-+inf matrix (not None / mean shortcut)
+      - D_k[:,0] is remapped to local indices 0..P_k-1 exactly as expected by predict/extract_pools
+      - lattice edges are built per profile if you provide a builder; otherwise passed through
+    """
+    # imports from repo
+    from rashomon import loss as _loss
+    try:
+        from rashomon import hasse as _hasse
+    except Exception:
+        _hasse = None
+
+    normalize = D.shape[0]
+    # coerce arrays
+    D_arr = np.asarray(D)
+    y_arr = np.asarray(y)
+    if D_arr.ndim == 1:
+        D_arr = D_arr.reshape(-1, 1)
+    if y_arr.ndim == 1:
+        y_arr = y_arr.reshape(-1, 1)
+
+    R = np.asarray(R, dtype=int)
+    assert R.shape[0] == M, "R must be length M"
+
+    # width for sigma in repo convention: at least 1 col for all-inf case
+    C_per = np.maximum(R - 2, 0)
+    C = max(1, int(C_per.max()))
+
+    num_profiles = len(state)
+    num_policies = len(policies)
+
+    # global policy ids per profile
+    pol_ids_by_profile = [np.where(prof_idx_of_policy == k)[0].astype(int) for k in range(num_profiles)]
+    pid_global = D_arr[:, 0].astype(int)
+
+    total = 0.0
+
+    for k in range(num_profiles):
+        pol_ids = pol_ids_by_profile[k]
+        if pol_ids.size == 0:
+            # repo effectively contributes nothing if no policies in this profile
+            continue
+
+        mask = np.isin(pid_global, pol_ids)
+        if not np.any(mask):
+            # repo effectively contributes nothing if no data for this profile
+            continue
+
+        # slice data for this profile
+        D_k = D_arr[mask].copy()
+        y_k = y_arr[mask].copy()
+
+        # localize policy ids 0..P_k-1
+        local_map = -np.ones(num_policies, dtype=int)
+        local_map[pol_ids] = np.arange(pol_ids.size, dtype=int)
+        D_k[:, 0] = local_map[D_k[:, 0].astype(int)]
+
+        # local policy list (order defines local ids)
+        policies_k = [policies[int(i)] for i in pol_ids]
+
+        # repo way: recompute policy_means on the localized D_k/y_k
+        pm_k = _loss.compute_policy_means(D_k, y_k, len(policies_k))
+
+        # sigma: expand ProfilePart to full, else treat None as all-inf
+        part_k = state[k]
+        Sigma_k_full = AIS.assemble_sigma_full_for_profile(part_k, M, R)  # your function
+        if Sigma_k_full is None:
+            Sigma_k_full = np.full((M, C), np.inf, dtype=float)
+
+        # lattice edges: repo computes per-profile edges from policies_k; do that if possible
+        edges_k = None
+        if lattice_edges is None:
+            edges_k = None
+        elif callable(lattice_edges):
+            # if you passed a builder function
+            edges_k = lattice_edges(policies_k)
+        else:
+            # if you passed a precomputed GLOBAL edge list, we can't safely subset without a map;
+            # best repo-faithful fallback is to rebuild if hasse is available.
+            if _hasse is not None:
+                try:
+                    policies_sorted = _hasse.is_policies_sorted(policies_k)
+                    # note: repo uses R-1 for lattice_edges
+                    edges_k = _hasse.lattice_edges(policies_k, sorted=policies_sorted, M=M, R=R-1)
+                except Exception:
+                    edges_k = None
+            else:
+                edges_k = None
+
+        Q_k = _loss.compute_Q(
+            D=D_k,
+            y=y_k,
+            sigma=Sigma_k_full,
+            policies=policies_k,
+            policy_means=pm_k,
+            reg=reg,
+            normalize=normalize,
+            lattice_edges=edges_k
+        )
+        print(Q_k)
+        total += float(Q_k)
+
+    return float(total)
 
 # ---------- 3) AIS score: exp(-beta * global_loss_raw(state)) ----------
 def make_score_s_expneg_raw(
