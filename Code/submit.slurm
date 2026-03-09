@@ -2,7 +2,7 @@
 
 #SBATCH --job-name=rashomon_mcmc
 #SBATCH --account=escience
-#SBATCH --partition=cpu-g2-mem2x
+#SBATCH --partition=cpu-g2
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --mem=16G
