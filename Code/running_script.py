@@ -136,17 +136,40 @@ score_s = AIS.make_score_s_expneg_raw(
     prior_logprob=lambda state: 0.0
 )
 
-cfg = AIS.AISConfig(n_paths=500, n_levels=5, moves_per_level=5, min_len=1, seed=2)
+log_alpha = [score_s(A) for A in anchors]
+
+buckets = AIS.make_p0_buckets_weighted_S0(RPS_states, np.asarray(R,int), log_alpha,
+                                      eps1=0.05, eps2=0.25, min_len=1)
+log_p0 = lambda z: AIS.log_p0_distance_weighted_S0(z, buckets)
+
+ladder, ess_ratios = AIS.pilot_adaptive_ladder(
+    init_sampler=lambda N: MCMC.init_from_RPS_batch(RPS_states, log_alpha, N, rng_seed=777),
+    log_p0=log_p0,
+    score_s=score_s,
+    N=512,
+    ess_target=0.80,
+    beta0=0.0, beta1=1.0,
+    initial_delta=0.1,
+    min_delta=1e-3,
+    moves_per_probe=3,   # small mixing at each accepted β (optional)
+    min_len=1,
+    rng_seed=777
+)
+print("Adaptive ladder has", len(ladder), "levels; first 10:", ladder[:10])
+print("Per-step ESS ratios (len =", len(ess_ratios), "):", ess_ratios[:10])
+
+cfg = AIS.AISConfig(n_paths=500, n_levels=5, moves_per_level=500, min_len=1, seed=2)
 out_500 = AIS.run_ais_state_streaming(
     anchors=R_set,          # not used by q0, but you may keep for consistency
     score_s=score_s,        # returns exp(-loss(state)) or similar
     cfg=cfg,
     RPS=RPS_states,              # your Rashomon partitions as a list of State
     R_per=R,  # levels per arm (includes control)
-    eps1=0.05, eps2=0.25
+    eps1=0.05, eps2=0.25,
+    ladder = ladder
 )
 
-log_alpha = [score_s(A) for A in anchors]
-res = MCMC.run_mcmc_streaming(RPS_states, log_alpha, score_s, steps=300000, burnin=5000, thin=5,
-                         out_jsonl="mcmc_run1.jsonl", progress_json="mcmc_run1_progress.json")
+# log_alpha = [score_s(A) for A in anchors]
+# res = MCMC.run_mcmc_streaming(RPS_states, log_alpha, score_s, steps=300000, burnin=5000, thin=5,
+#                          out_jsonl="mcmc_run1.jsonl", progress_json="mcmc_run1_progress.json")
 

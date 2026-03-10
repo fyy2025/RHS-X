@@ -742,7 +742,8 @@ def run_ais_state(anchors: List[State],
                   RPS: Optional[List[State]] = None,
                   R_per: Optional[np.ndarray] = None,
                   eps1: float = 0.05, eps2: float = 0.25,
-                  tau_init: float = 1.0) -> AISOutput:
+                  tau_init: float = 1.0,
+                  ladder: Optional[np.ndarray] = None) -> AISOutput:
     if cfg.seed is not None:
         np.random.seed(cfg.seed); random.seed(cfg.seed)
     rng = np.random.default_rng(cfg.seed)
@@ -756,7 +757,7 @@ def run_ais_state(anchors: List[State],
     buckets = make_p0_buckets_weighted_S0(RPS, np.asarray(R_per,int), log_alpha, eps1=eps1, eps2=eps2, min_len=cfg.min_len)
     log_p0 = lambda z: log_p0_distance_weighted_S0(z, buckets)     
 
-    ladder = make_ladder(cfg.n_levels)
+    ladder = ladder
 
     terminals=[]; logw=np.zeros(cfg.n_paths,float)
     for p in range(cfg.n_paths):
@@ -808,6 +809,7 @@ def run_ais_state_streaming(
     R_per: Optional[np.ndarray] = None,
     eps1: float = 0.05, eps2: float = 0.25,
     out_jsonl: str = "AIS_samples.jsonl",
+    ladder: Optional[List[State]] = None,
     tau_init: float = 1.0,
     keep_in_memory: bool = True
 ) -> Dict[str, List[Any]]:
@@ -818,7 +820,7 @@ def run_ais_state_streaming(
     buckets = make_p0_buckets_weighted_S0(RPS, np.asarray(R_per,int), log_alpha, eps1=eps1, eps2=eps2, min_len=cfg.min_len)
     log_p0 = lambda z: log_p0_distance_weighted_S0(z, buckets)     
 
-    ladder = make_ladder(cfg.n_levels)
+    ladder = ladder
 
     terminals=[]; logw=np.zeros(cfg.n_paths,float)
 
