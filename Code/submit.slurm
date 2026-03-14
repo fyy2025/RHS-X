@@ -27,6 +27,6 @@ echo "Using python: $(which python)"
 python --version
 
 # Run script
-python run2.py
+python run3.py
 
 echo "Finished at $(date)"
