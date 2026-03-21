@@ -12,6 +12,7 @@ def main():
     # N_ITER = 300000
     # N_BURN = 50000
     # N_THIN = 10
+    N_CHAIN = 20
     theta = 13.3
     lamb = 1
 
@@ -215,7 +216,7 @@ def main():
     )
 
     MCMC_RPS_diff = []
-    for iter in range(20):
+    for iter in range(N_CHAIN):
         res = MCMC.run_mcmc_streaming(
             RPS_states,
             log_alpha,
