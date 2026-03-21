@@ -1,3 +1,4 @@
+import json
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -8,9 +9,16 @@ from rashomon import hasse, extract_pools, loss, aggregate, AIS, MCMC
 
 def main():
 
-    N_ITER = 300000
-    N_BURN = 50000
-    N_THIN = 10
+    # N_ITER = 300000
+    # N_BURN = 50000
+    # N_THIN = 10
+    theta = 13.3
+    lamb = 1
+
+    N_ITER=30
+    N_BURN=5
+    N_THIN=5
+    
 
     M = 3
     R = np.array([4, 3, 3])
@@ -164,8 +172,6 @@ def main():
     policy_means = loss.compute_policy_means(D, y, num_policies)
 
     H = np.inf
-    theta = 13.3
-    lamb = 1
 
     R_set, R_profiles = aggregate.RAggregate(
         M, R, H, D, y, theta, reg=lamb, verbose=True
@@ -196,19 +202,52 @@ def main():
     )
 
     log_alpha = [score_s(A) for A in anchors]
-    print(log_alpha)
 
-    res = MCMC.run_mcmc_streaming(
-        RPS_states,
+    RPS_mean = AIS.estimate_policy_means_from_RPS(
+        RPS_states,                     # dict with key "samples": List[State]
         log_alpha,
-        score_s,
-        steps=N_ITER,
-        burnin=N_BURN,
-        thin=N_THIN,
-        out_jsonl="mcmc_run2.jsonl",
-        progress_json="mcmc_run2_progress.json",
+        all_policies,                     # global policy list (length P)
+        policy_means,                 # np.ndarray [P,2] = [sum_y, count]
+        prof_idx_of_policy,           # length-P array: policy_id -> profile k, for 36 policies, which profile is each policy in
+        R,                        # np.ndarray of arm levels (includes control)
+        M,
+        lattice_edges=None            # optional lattice; pass None if unused
     )
 
+    MCMC_RPS_diff = []
+    for iter in range(20):
+        res = MCMC.run_mcmc_streaming(
+            RPS_states,
+            log_alpha,
+            score_s,
+            steps=N_ITER,
+            burnin=N_BURN,
+            thin=N_THIN,
+            seed = iter*42,
+            out_jsonl="test.jsonl",
+            progress_json="test_progress.json",
+        )
 
+        mcmc_res = MCMC.load_mcmc_res_from_jsonl("test.jsonl")
+
+        draws = MCMC.policy_mean_draws_from_mcmc_nig(
+            mcmc_res=mcmc_res,
+            D=D, y=y,
+            policies=all_policies,
+            prof_idx_of_policy=prof_idx_of_policy,
+            R_per=R,
+            M=M,
+            lattice_edges=None,
+            n_draws_per_state=1,
+            mu0=0.0, kappa0=1.0, alpha0=0.0, beta0=-1.0,
+            seed=1
+        )
+
+        diff_mean = draws.mean(axis=0) - RPS_mean
+        MCMC_RPS_diff.append(diff_mean)
+
+    diff_quants = {q: np.quantile(MCMC_RPS_diff, q, axis=0) for q in (0.1, 0.5, 0.9)}
+    out = pd.DataFrame.from_dict(diff_quants)
+    out.to_csv(f'MCMC_RPS_diff_theta{theta}_lambda{lamb}')
 if __name__ == "__main__":
     main()

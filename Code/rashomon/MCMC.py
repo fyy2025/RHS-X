@@ -745,6 +745,9 @@ def run_mcmc_streaming(
     accepts = 0
     kept = 0
 
+    for fp in (out_jsonl, progress_json):
+        if fp and os.path.exists(fp):
+            os.remove(fp)
     # open in append mode so you can resume / tail the file
     with open(out_jsonl, "a", encoding="utf-8") as f:
         for t in range(steps):

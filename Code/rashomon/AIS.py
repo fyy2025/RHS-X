@@ -977,6 +977,65 @@ def estimate_policy_means_from_ais(
 
     return mu_hat
 
+def estimate_policy_means_from_RPS(
+    RPS_states,                     # dict with key "samples": List[State]
+    log_alpha,
+    policies,                     # global policy list (length P)
+    policy_means,                 # np.ndarray [P,2] = [sum_y, count]
+    prof_idx_of_policy,           # length-P array: policy_id -> profile k, for 36 policies, which profile is each policy in
+    R_per,                        # np.ndarray of arm levels (includes control)
+    M,
+    lattice_edges=None            # optional lattice; pass None if unused
+):
+    """
+    Posterior-weighted mean outcome per policy using MCMC samples.
+    Weights default to uniform over retained samples.
+    Returns: np.ndarray [P]
+    """
+    samples = RPS_states
+    if len(samples) == 0:
+        return np.zeros(len(policies), float)
+
+    P = len(policies)
+    mu_hat = np.zeros(P, dtype=float)
+
+    # uniform weights over MCMC samples (empirical posterior)
+    w = [i/sum(log_alpha) for i in log_alpha]
+
+    # build profile→global index map once
+    K = int(np.max(prof_idx_of_policy)) + 1
+    prof_to_global = [[] for _ in range(K)]
+    for pid in range(P):
+        prof_to_global[prof_idx_of_policy[pid]].append(pid)
+
+    # per-profile slices (fixed order defines local indices)
+    prof_policies  = [[policies[i] for i in idxs] for idxs in prof_to_global]
+    prof_means_arr = [
+        policy_means[np.array(idxs, int), :] if idxs else np.zeros((0, 2))
+        for idxs in prof_to_global
+    ]
+
+    R_per = np.asarray(R_per, int)  # ensure array for assemble
+
+    for x_state, ww in zip(samples, w):
+        for k in range(K):
+            idxs = prof_to_global[k]
+            if not idxs:
+                continue
+
+            # expand compact profile matrix to full-width expected by extract_pools
+            sigma_full_k = assemble_sigma_full_for_profile(x_state[k], M, R_per)
+
+            # pools + policy→pool mapping on the *local* list for profile k
+            pi_pools_k, pi_policies_k = extract_pools.extract_pools(prof_policies[k], sigma_full_k, lattice_edges)
+            mu_pools_k = loss.compute_pool_means(prof_means_arr[k], pi_pools_k)
+
+            # IMPORTANT: pi_policies_k is keyed by LOCAL INDEX, not policy tuple
+            for local_idx, pid in enumerate(idxs):
+                pool_id = pi_policies_k[local_idx]
+                mu_hat[pid] += ww * mu_pools_k[pool_id]
+
+    return mu_hat
 
 # ---------- 2) quick comparison against data-generation truth ----------
 
