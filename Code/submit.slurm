@@ -6,7 +6,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --mem=16G
-#SBATCH --time=40:00:00
+#SBATCH --time=80:00:00
 #SBATCH --output=log/%x_%j.out
 #SBATCH --error=log/%x_%j.err
 #SBATCH --mail-type=FAIL,KILL,END
