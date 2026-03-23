@@ -9,17 +9,17 @@ from rashomon import hasse, extract_pools, loss, aggregate, AIS, MCMC
 
 def main():
 
-    # N_ITER = 300000
-    # N_BURN = 50000
-    # N_THIN = 10
+    N_ITER = 11000
+    N_BURN = 1000
+    N_THIN = 10
     N_CHAIN = 20
     theta = 13.3
     lamb = 1
 
-    N_ITER=30
-    N_BURN=5
-    N_THIN=5
-    
+    # N_ITER=30
+    # N_BURN=5
+    # N_THIN=5
+
 
     M = 3
     R = np.array([4, 3, 3])
