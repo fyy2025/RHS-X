@@ -13,7 +13,7 @@ def main():
     N_BURN = 1000
     N_THIN = 10
     N_CHAIN = 20
-    theta = 13.3
+    theta = 13.5
     lamb = 1
 
     # N_ITER=30
