@@ -856,6 +856,51 @@ def run_ais_state_streaming(
     m=float(np.max(logw)); w=np.exp(logw-m)
     return AISOutput(terminals, logw, w/w.sum(), ladder)
 
+
+def load_ais_from_jsonl(jsonl_path: str):
+    """
+    Read an AIS JSONL file and return an AISOutput-like dict:
+      {
+        "terminals": [State, ...],
+        "logw": np.ndarray,
+        "normw": np.ndarray,
+        "iters": np.ndarray (optional)
+      }
+
+    Assumes each JSON line looks like either:
+      {"state": [...], "logw": <float>, ...}
+    or
+      {"terminal": [...], "logw": <float>, ...}
+    and that `_jsonable_to_state(...)` + ProfilePart are in scope.
+    """
+    terminals = []
+    logw = []
+    iters = []
+
+    with open(jsonl_path, "r", encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+
+            st_obj = rec.get("state", None)
+            if st_obj is None:
+                st_obj = rec.get("terminal", None)
+            if st_obj is None:
+                raise ValueError("JSONL record missing 'state'/'terminal' field.")
+
+            terminals.append(MCMC._jsonable_to_state(st_obj))
+            logw.append(float(rec.get("unnormalized_log_weight", rec.get("log_weight", np.nan))))
+            iters.append(int(rec.get("iter", rec.get("path", -1))))
+
+    logw = np.asarray(logw, dtype=float)
+
+    return {
+        "terminals": terminals,
+        "logw": logw,
+        "iters": np.asarray(iters, dtype=int),
+    }
+
 ###
 # 5) Formatting of rashomon output
 ###
