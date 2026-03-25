@@ -824,6 +824,9 @@ def run_ais_state_streaming(
 
     terminals=[]; logw=np.zeros(cfg.n_paths,float)
 
+    if fp and os.path.exists(out_jsonl):
+        os.remove(out_jsonl)
+
     with open(out_jsonl, "a", encoding="utf-8") as f:
         for p in range(cfg.n_paths):
             # initial x from RPS by loss weights
