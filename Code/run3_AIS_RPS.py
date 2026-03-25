@@ -10,13 +10,13 @@ from rashomon import hasse, extract_pools, loss, aggregate, AIS, MCMC
 def main():
 
     N_CHAIN = 20
-    theta = 13.3
+    theta = 13.5
     lamb = 1
 
     n_paths=300
-    n_levels=20 
+    n_levels=20
     moves_per_level=5
-    
+
 
     M = 3
     R = np.array([4, 3, 3])
