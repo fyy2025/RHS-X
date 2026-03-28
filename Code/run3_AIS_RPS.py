@@ -242,7 +242,7 @@ def main():
             RPS=RPS_states,              # your Rashomon partitions as a list of State
             R_per=R,  # levels per arm (includes control)
             eps1=0.5, eps2=0.75,
-            out_jsonl = "AIS_samples_diff.jsonl",
+            out_jsonl = f'AIS_samples_diff_theta{theta}_lambda{lamb}.jsonl',
             ladder=ladder
         )
 
