@@ -1398,3 +1398,318 @@ def enumerate_all_states_and_losses(
         if (max_states is not None) and (ctr >= max_states):
             break
     return out
+
+
+###
+# 8) Making inference about the quantile of beta posterior dist
+###
+
+def extract_policy_mu_sigma_nig(
+    state,                    # State: list[ProfilePart], length = num_profiles
+    D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
+    M,
+    policies,                 # global policies list (len P)
+    prof_idx_of_policy,       # length-P array: global policy id -> profile k
+    R_per,                    # per-arm levels (len M)
+    lattice_edges=None,
+    mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
+    seed=None
+):
+    """
+    For a *single* global partition state, extract one (mu_k, sigma_k) for each policy k
+    under a Normal-Inverse-Gamma model
+
+    Returns:
+      mu   : np.ndarray (K,)
+      sigma: np.ndarray (K,)   # std dev samples (sqrt(sigma^2))
+    """
+    rng = np.random.default_rng(seed)
+    P = len(policies)
+
+    # y to 1D
+    y1 = y[:, 0] if (isinstance(y, np.ndarray) and y.ndim == 2) else np.asarray(y).ravel()
+    pid_all = D[:, 0].astype(int)
+
+    K = int(np.max(prof_idx_of_policy)) + 1
+
+    # Profile -> list of global policy ids (fixed order defines local indices)
+    prof_to_global = [[] for _ in range(K)]
+    for pid in range(P):
+        prof_to_global[int(prof_idx_of_policy[pid])].append(pid)
+
+    prof_policies = [[policies[i] for i in idxs] for idxs in prof_to_global]
+    prof_pid_to_local = []
+    for k in range(K):
+        idxs = prof_to_global[k]
+        prof_pid_to_local.append({pid: j for j, pid in enumerate(idxs)})
+
+    # Also split data indices by profile (fast masks)
+    prof_data_idx = []
+    for k in range(K):
+        idxs = np.array(prof_to_global[k], dtype=int)
+        if idxs.size == 0:
+            prof_data_idx.append(np.array([], dtype=int))
+            continue
+        mask = np.isin(pid_all, idxs)
+        prof_data_idx.append(np.flatnonzero(mask))
+
+    # For each profile, build pools & also pool sufficient stats
+    per_prof_poolmap = [None] * K
+    per_prof_poolstats = [None] * K
+    per_prof_npools = [0] * K
+
+    mu = np.zeros(P, float)
+    t_scale = np.zeros(P, float)
+    df = np.zeros(P, float)
+
+    for k in range(K):
+        idxs = prof_to_global[k]
+        if not idxs:
+            continue
+
+        sigma_full_k = assemble_sigma_full_for_profile(state[k], M, np.asarray(R_per, int))
+        pi_pools_k, pi_policies_k = extract_pools.extract_pools(prof_policies[k], sigma_full_k, lattice_edges)
+        n_pools = len(pi_pools_k)
+        per_prof_npools[k] = n_pools
+        per_prof_poolmap[k] = pi_policies_k  # local_idx -> pool_id
+
+        # compute sufficient stats by scanning the data rows in this profile
+        n = np.zeros(n_pools, int)
+        sy = np.zeros(n_pools, float)
+        sy2 = np.zeros(n_pools, float)
+
+        didx = prof_data_idx[k]
+        pid_k = pid_all[didx]
+        y_k = y1[didx]
+
+        pid2loc = prof_pid_to_local[k]
+        for pid_obs, y_obs in zip(pid_k, y_k):
+            loc = pid2loc[int(pid_obs)]               # local index of this policy in prof_policies[k]
+            pool = pi_policies_k[loc]                 # pool id
+            n[pool] += 1
+            sy[pool] += float(y_obs)
+            sy2[pool] += float(y_obs) ** 2
+
+        per_prof_poolstats[k] = (n, sy, sy2)
+
+        idxs = prof_to_global[k]
+        if not idxs:
+            continue
+        pi_policies_k = per_prof_poolmap[k]
+        n, sy, sy2 = per_prof_poolstats[k]
+        n_pools = per_prof_npools[k]
+
+        # sample a mean for each pool
+        pool_mu = np.zeros(n_pools, float)
+        pool_t_scale = np.zeros(n_pools, float)
+        pool_df = np.zeros(n_pools, float)
+        for j in range(n_pools):
+            mu_n, k_n, a_n, b_n = MCMC.nig_posterior_params(
+                n[j], sy[j], sy2[j],
+                mu0=mu0, kappa0=kappa0, alpha0=alpha0, beta0=beta0
+            )
+
+            # Marginal posterior:
+            # mu | data ~ t_{2a_n}(loc=mu_n, scale=sqrt(b_n / (a_n * k_n)))
+            df_n = 2.0 * a_n
+            t_scale_n = np.sqrt(b_n / (a_n * k_n))
+        
+            pool_mu[j] = float(mu_n)
+            pool_t_scale[j] = float(np.sqrt(t_scale_n))
+            pool_df[j] = float(df_n)
+
+        for local_idx, pid in enumerate(idxs):
+            pool_id = pi_policies_k[local_idx]
+            mu[pid] = pool_mu[pool_id]
+            t_scale[pid] = pool_t_scale[pool_id]
+            df[pid] = pool_df[pool_id]
+
+    return mu, t_scale, df
+
+def extract_policy_posteriors_from_ais_sample(
+    ais_sample,
+    D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
+    M,
+    policies,                 # global policies list (len P)
+    prof_idx_of_policy,       # length-P array: global policy id -> profile k
+    R,                    # per-arm levels (len M)
+    lattice_edges=None,
+    mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
+    seed=None):
+    """
+    Parameters
+    ----------
+    ais_sample : list of dicts
+        Each element must have:
+          - rec["state"]
+          - rec["logw"]
+
+    Returns
+    -------
+    logw : ndarray, shape (n_particles,)
+    mu   : ndarray, shape (n_particles, n_policies)
+    sd   : ndarray, shape (n_particles, n_policies)
+    """
+    logw = []
+    mu_list = []
+    scale_list = []
+    df_list = []
+
+    state_list = ais_sample["terminals"]
+    lw_list = ais_sample["logw"]
+
+    for state, lw in zip(state_list, lw_list):
+        mu_i, scale_i, df_i = extract_policy_mu_sigma_nig(
+            state=state,                    # State: list[ProfilePart], length = num_profiles
+            D=D, y=y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
+            M=M,
+            policies=policies,                 # global policies list (len P)
+            prof_idx_of_policy=prof_idx_of_policy,       # length-P array: global policy id -> profile k
+            R_per=R,                    # per-arm levels (len M)
+            lattice_edges=None,
+            mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
+            seed=None
+        )
+
+        logw.append(lw)
+        mu_list.append(mu_i)
+        scale_list.append(scale_i)
+        df_list.append(df_i)
+
+    logw = np.asarray(logw, dtype=float)
+    mu = np.asarray(mu_list, dtype=float)
+    scale = np.asarray(scale_list, dtype=float)
+    df = np.asarray(df_list, dtype=float)
+
+    return logw, mu, scale, df
+
+from scipy.stats import t as student_t
+
+def ais_policy_cdf(u, logw, mu_k, scale_k, df_k):
+    """
+    AIS mixture CDF for one policy/profile k under a mixture of Student-t posteriors:
+        F_k(u) = sum_i w_i * T_df_i((u - mu_ik) / scale_ik)
+    This is achieved by viewing the F_k(u) as a function of the state x, g(x), then use the 
+    theory of important sampling to estimate E[g(x)]
+
+    Parameters
+    ----------
+    u : float
+        Value at which to evaluate the CDF.
+    logw : array-like, shape (n_particles,)
+        Unnormalized AIS log-weights.
+    mu_k : array-like, shape (n_particles,)
+        Location parameter for policy/profile k under each AIS particle.
+    scale_k : array-like, shape (n_particles,)
+        Scale parameter of the Student-t posterior for policy/profile k under each AIS particle.
+        This is the t-scale, not the posterior standard deviation.
+    df_k : array-like or float
+        Degrees of freedom for each AIS particle. Can be scalar if shared.
+
+    Returns
+    -------
+    float
+        Weighted AIS mixture CDF at u.
+    """
+    w = _normalize_logw(logw)
+    mu_k = np.asarray(mu_k, dtype=float)
+    scale_k = np.asarray(scale_k, dtype=float)
+    df_k = np.asarray(df_k, dtype=float)
+
+    if df_k.ndim == 0:
+        df_k = np.full_like(mu_k, float(df_k), dtype=float)
+
+    vals = np.empty_like(mu_k, dtype=float)
+
+    for i, (m, s, df) in enumerate(zip(mu_k, scale_k, df_k)):
+        if s <= 0:
+            vals[i] = 1.0 if u >= m else 0.0
+        else:
+            vals[i] = student_t.cdf((u - m) / s, df=df)
+
+    return float(np.sum(w * vals))
+
+def ais_policy_quantile(logw, mu_k, scale_k, df_k, alpha=0.95, tol=1e-8, maxiter=200):
+    """Reverse engineer, using binary dissection to find the quantile value"""
+    mu_k = np.asarray(mu_k, dtype=float)
+    scale_k = np.asarray(scale_k, dtype=float)
+    df_k = np.asarray(df_k, dtype=float)
+
+    if df_k.ndim == 0:
+        df_k = np.full_like(mu_k, float(df_k), dtype=float)
+
+    eps = 1e-12
+    lo = float(np.min(mu_k - 20.0 * np.maximum(scale_k, eps)))
+    hi = float(np.max(mu_k + 20.0 * np.maximum(scale_k, eps)))
+
+    while ais_policy_cdf(lo, logw, mu_k, scale_k, df_k) >= alpha:
+        lo -= max(1.0, 0.5 * max(abs(lo), 1.0))
+
+    while ais_policy_cdf(hi, logw, mu_k, scale_k, df_k) < alpha:
+        hi += max(1.0, 0.5 * max(abs(hi), 1.0))
+
+    for _ in range(maxiter):
+        mid = 0.5 * (lo + hi)
+        fmid = ais_policy_cdf(mid, logw, mu_k, scale_k, df_k)
+        if fmid < alpha:
+            lo = mid
+        else:
+            hi = mid
+        if abs(hi - lo) < tol:
+            break
+
+    return 0.5 * (lo + hi)
+
+def ais_quantiles_for_all_policies(
+        ais_sample,
+        D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
+        M,
+        policies,                 # global policies list (len P)
+        prof_idx_of_policy,       # length-P array: global policy id -> profile k
+        R,                    # per-arm levels (len M)
+        lattice_edges=None,
+        mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
+        alpha=0.95,
+        seed=None):
+    """
+    Compute AIS posterior alpha-quantile for every policy.
+
+    Returns
+    -------
+    dict with:
+      - alpha
+      - quantiles : shape (n_policies,)
+      - logw, mu, sd
+    """
+    logw, mu, scale, df = extract_policy_posteriors_from_ais_sample(
+        ais_sample,
+        D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
+        M,
+        policies,                 # global policies list (len P)
+        prof_idx_of_policy,       # length-P array: global policy id -> profile k
+        R,                    # per-arm levels (len M)
+        lattice_edges=None,
+        mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
+        seed=None
+    )
+
+    n_policies = mu.shape[1]
+    q = np.empty(n_policies, dtype=float)
+
+    for k in range(n_policies):
+        q[k] = ais_policy_quantile(
+            logw=logw,
+            mu_k=mu[:, k],
+            scale_k=scale[:, k],
+            df_k=df[:, k],
+            alpha=alpha,
+        )
+
+    return {
+        "alpha": alpha,
+        "quantiles": q,
+        "logw": logw,
+        "mu": mu,
+        "sd": scale,
+        "df": df
+    }
