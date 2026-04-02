@@ -802,6 +802,7 @@ def append_jsonl(path: str, record: Dict[str, Any]) -> None:
 
 
 def run_ais_state_streaming(
+    buckets,
     anchors: List[State],
     score_s: Callable[[State], float],
     cfg: AISConfig = AISConfig(),
@@ -817,14 +818,14 @@ def run_ais_state_streaming(
     # NEW p0 built from RPS using existing log_alpha (weighted S0)
     if RPS is None or R_per is None:
         raise ValueError("Provide RPS and R_per for the distance-bucket p0.")
-    buckets = make_p0_buckets_weighted_S0(RPS, np.asarray(R_per,int), log_alpha, eps1=eps1, eps2=eps2, min_len=cfg.min_len)
+    buckets = buckets
     log_p0 = lambda z: log_p0_distance_weighted_S0(z, buckets)     
 
     ladder = ladder
 
     terminals=[]; logw=np.zeros(cfg.n_paths,float)
 
-    if fp and os.path.exists(out_jsonl):
+    if out_jsonl and os.path.exists(out_jsonl):
         os.remove(out_jsonl)
 
     with open(out_jsonl, "a", encoding="utf-8") as f:
@@ -1669,7 +1670,7 @@ def ais_quantiles_for_all_policies(
         R,                    # per-arm levels (len M)
         lattice_edges=None,
         mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
-        alpha=0.95,
+        alpha=0.975,
         seed=None):
     """
     Compute AIS posterior alpha-quantile for every policy.
