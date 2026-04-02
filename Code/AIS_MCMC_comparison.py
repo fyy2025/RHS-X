@@ -213,17 +213,6 @@ def main():
 
     log_alpha = [score_s(A) for A in anchors]
 
-    RPS_mean = AIS.estimate_policy_means_from_RPS(
-        RPS_states,                     # dict with key "samples": List[State]
-        log_alpha,
-        all_policies,                     # global policy list (length P)
-        policy_means,                 # np.ndarray [P,2] = [sum_y, count]
-        prof_idx_of_policy,           # length-P array: policy_id -> profile k, for 36 policies, which profile is each policy in
-        R,                        # np.ndarray of arm levels (includes control)
-        M,
-        lattice_edges=None            # optional lattice; pass None if unused
-    )
-
     res = MCMC.run_mcmc_streaming(
             RPS_states,
             log_alpha,
@@ -300,6 +289,19 @@ def main():
         buckets = AIS.make_p0_buckets_weighted_S0(RPS_states, np.asarray(R,int), log_alpha,
                                             eps1=0.05, eps2=0.25, min_len=1)
         log_p0 = lambda z: AIS.log_p0_distance_weighted_S0(z, buckets)
+
+        RPS_mean = AIS.estimate_policy_means_from_RPS(
+            RPS_states,                     # dict with key "samples": List[State]
+            log_alpha,
+            all_policies,                     # global policy list (length P)
+            policy_means,                 # np.ndarray [P,2] = [sum_y, count]
+            prof_idx_of_policy,           # length-P array: policy_id -> profile k, for 36 policies, which profile is each policy in
+            R,                        # np.ndarray of arm levels (includes control)
+            M,
+            lattice_edges=None            # optional lattice; pass None if unused
+        )
+
+        AIS_post_mean_per_theta[f"RPS_{theta}"] = RPS_mean
 
         ladder, ess_ratios = AIS.pilot_adaptive_ladder(
             init_sampler=lambda N: MCMC.init_from_RPS_batch(RPS_states, log_alpha, N, rng_seed=777),
