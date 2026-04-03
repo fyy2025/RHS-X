@@ -10,21 +10,21 @@ from rashomon import hasse, extract_pools, loss, aggregate, AIS, MCMC
 
 def main():
 
-    N_CHAIN = 20
     lamb = 1
 
-    # N_ITER = 11000
-    # N_BURN = 1000
-    # N_THIN = 10
+    N_CHAIN = 1
 
-    N_ITER = 110
-    N_BURN = 10
-    N_THIN = 1
-    n_paths=30
-    n_levels=5
+    N_ITER = 30000
+    N_BURN = 10000
+    N_THIN = 10
+    n_paths = 300
+    n_levels = 20
 
-    # n_paths=300
-    # n_levels=20
+    # N_ITER = 110
+    # N_BURN = 10
+    # N_THIN = 1
+    # n_paths=30
+    # n_levels=5
 
     moves_per_level=5
 

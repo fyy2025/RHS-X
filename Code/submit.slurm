@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --job-name=ais_rps
+#SBATCH --job-name=ais_mcmc
 #SBATCH --account=escience
 #SBATCH --partition=cpu-g2
 #SBATCH --nodes=1
@@ -27,6 +27,6 @@ echo "Using python: $(which python)"
 python --version
 
 # Run script
-python run3_AIS_RPS.py
+python AIS_MCMC_comparison.py
 
 echo "Finished at $(date)"
