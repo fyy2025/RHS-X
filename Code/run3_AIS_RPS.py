@@ -199,7 +199,7 @@ def main():
         prior_logprob=lambda state: 0.0,
     )
 
-    log_alpha = [score_s(A) for A in anchors]
+    log_alpha = [np.log(max(1e-300, score_s(A))) for A in anchors] 
 
     RPS_mean = AIS.estimate_policy_means_from_RPS(
         RPS_states,                     # dict with key "samples": List[State]

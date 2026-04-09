@@ -136,7 +136,7 @@ score_s = AIS.make_score_s_expneg_raw(
     prior_logprob=lambda state: 0.0
 )
 
-log_alpha = [score_s(A) for A in anchors]
+log_alpha = [np.log(max(1e-300, score_s(A))) for A in anchors] 
 
 buckets = AIS.make_p0_buckets_weighted_S0(RPS_states, np.asarray(R,int), log_alpha,
                                       eps1=0.05, eps2=0.25, min_len=1)

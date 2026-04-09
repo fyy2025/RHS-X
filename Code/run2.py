@@ -195,8 +195,7 @@ def main():
         prior_logprob=lambda state: 0.0,
     )
 
-    log_alpha = [score_s(A) for A in anchors]
-    print(log_alpha)
+    log_alpha = [np.log(max(1e-300, score_s(A))) for A in anchors] 
 
     res = MCMC.run_mcmc_streaming(
         RPS_states,

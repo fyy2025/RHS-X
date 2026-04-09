@@ -167,7 +167,7 @@ def estimate_policy_means_from_RPS(
     mu_hat = np.zeros(P, dtype=float)
 
     # uniform weights over MCMC samples (empirical posterior)
-    w = [i/sum(log_alpha) for i in log_alpha]
+    w = AIS._softmax_logalpha(log_alpha)
 
     # build profile→global index map once
     K = int(np.max(prof_idx_of_policy)) + 1
@@ -805,3 +805,119 @@ def load_mcmc_res_from_jsonl(jsonl_path: str):
         "iters": np.asarray(iters, dtype=int),
         "log_score": np.asarray(log_score, dtype=float),
     }
+
+
+# Quantile inference
+
+def extract_policy_posteriors_from_MCMC_RPS_sample(
+    states,
+    logw,
+    D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
+    M,
+    policies,                 # global policies list (len P)
+    prof_idx_of_policy,       # length-P array: global policy id -> profile k
+    R,                    # per-arm levels (len M)
+    lattice_edges=None,
+    mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
+    seed=None):
+    """
+    Parameters
+    ----------
+    ais_sample : list of dicts
+        Each element must have:
+          - rec["state"]
+          - rec["logw"]
+
+    Returns
+    -------
+    logw : ndarray, shape (n_particles,)
+    mu   : ndarray, shape (n_particles, n_policies)
+    sd   : ndarray, shape (n_particles, n_policies)
+    """
+    logw = []
+    mu_list = []
+    scale_list = []
+    df_list = []
+
+    state_list = states
+    lw_list = logw
+
+    for state, lw in zip(state_list, lw_list):
+        mu_i, scale_i, df_i = AIS.extract_policy_mu_sigma_nig(
+            state=state,                    # State: list[ProfilePart], length = num_profiles
+            D=D, y=y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
+            M=M,
+            policies=policies,                 # global policies list (len P)
+            prof_idx_of_policy=prof_idx_of_policy,       # length-P array: global policy id -> profile k
+            R_per=R,                    # per-arm levels (len M)
+            lattice_edges=None,
+            mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
+            seed=None
+        )
+
+        logw.append(lw)
+        mu_list.append(mu_i)
+        scale_list.append(scale_i)
+        df_list.append(df_i)
+
+    logw = np.asarray(logw, dtype=float)
+    mu = np.asarray(mu_list, dtype=float)
+    scale = np.asarray(scale_list, dtype=float)
+    df = np.asarray(df_list, dtype=float)
+
+    return logw, mu, scale, df
+
+
+def quantiles_for_all_policies(
+    states,
+    logw,
+    D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
+    M,
+    policies,                 # global policies list (len P)
+    prof_idx_of_policy,       # length-P array: global policy id -> profile k
+    R,                    # per-arm levels (len M)
+    lattice_edges=None,
+    mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
+    p=[0.025, 0.5, 0.975],
+    seed=None):
+    """
+    Compute AIS posterior alpha-quantile for every policy.
+
+    Returns
+    -------
+    dict with:
+      - alpha
+      - quantiles : shape (n_policies,)
+      - logw, mu, sd
+    """
+    logw, mu, scale, df = extract_policy_posteriors_from_MCMC_RPS_sample(
+        states,
+        logw,
+        D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
+        M,
+        policies,                 # global policies list (len P)
+        prof_idx_of_policy,       # length-P array: global policy id -> profile k
+        R,                    # per-arm levels (len M)
+        lattice_edges=None,
+        mu0=mu0, kappa0=kappa0, alpha0=alpha0, beta0=beta0,
+        seed=None
+    )
+
+    output = dict()
+
+    for quantile in p:
+        n_policies = mu.shape[1]
+        q = np.empty(n_policies, dtype=float)
+
+        for k in range(n_policies):
+            q[k] = AIS.ais_policy_quantile(
+                logw=logw,
+                mu_k=mu[:, k],
+                scale_k=scale[:, k],
+                df_k=df[:, k],
+                alpha=quantile,
+            )
+
+        output[f"{quantile}"] = q
+    
+    return output

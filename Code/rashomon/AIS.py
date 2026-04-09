@@ -749,7 +749,7 @@ def run_ais_state(anchors: List[State],
     rng = np.random.default_rng(cfg.seed)
 
     # already compute this earlier in the code:
-    log_alpha = [score_s(A) for A in anchors]                       # existing line in your code
+    log_alpha = [math.log(max(1e-300, score_s(A))) for A in anchors]                       # existing line in your code
 
     # NEW p0 built from RPS using existing log_alpha (weighted S0)
     if RPS is None or R_per is None:
@@ -814,8 +814,7 @@ def run_ais_state_streaming(
     tau_init: float = 1.0,
     keep_in_memory: bool = True
 ) -> Dict[str, List[Any]]:
-    log_alpha = [score_s(A) for A in anchors]  
-    # NEW p0 built from RPS using existing log_alpha (weighted S0)
+
     if RPS is None or R_per is None:
         raise ValueError("Provide RPS and R_per for the distance-bucket p0.")
     buckets = buckets
@@ -1049,7 +1048,7 @@ def estimate_policy_means_from_RPS(
     mu_hat = np.zeros(P, dtype=float)
 
     # uniform weights over MCMC samples (empirical posterior)
-    w = [i/sum(log_alpha) for i in log_alpha]
+    w = _softmax_logalpha(log_alpha)
 
     # build profile→global index map once
     K = int(np.max(prof_idx_of_policy)) + 1
@@ -1133,6 +1132,7 @@ def _ess_from_logw(logw: np.ndarray) -> float:
     return 1.0 / float(np.sum(w*w))
 
 def _normalize_logw(logw: np.ndarray) -> np.ndarray:
+    """Get normalzied_weight from logw"""
     m = float(np.max(logw)); w = np.exp(logw - m); s = w.sum()
     return w / s if s > 0 else np.full_like(w, 1.0 / len(w))
 
@@ -1662,16 +1662,16 @@ def ais_policy_quantile(logw, mu_k, scale_k, df_k, alpha=0.95, tol=1e-8, maxiter
     return 0.5 * (lo + hi)
 
 def ais_quantiles_for_all_policies(
-        ais_sample,
-        D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
-        M,
-        policies,                 # global policies list (len P)
-        prof_idx_of_policy,       # length-P array: global policy id -> profile k
-        R,                    # per-arm levels (len M)
-        lattice_edges=None,
-        mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
-        alpha=0.975,
-        seed=None):
+    ais_sample,
+    D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
+    M,
+    policies,                 # global policies list (len P)
+    prof_idx_of_policy,       # length-P array: global policy id -> profile k
+    R,                    # per-arm levels (len M)
+    lattice_edges=None,
+    mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
+    p=[0.025, 0.5, 0.975],
+    seed=None):
     """
     Compute AIS posterior alpha-quantile for every policy.
 
@@ -1690,27 +1690,25 @@ def ais_quantiles_for_all_policies(
         prof_idx_of_policy,       # length-P array: global policy id -> profile k
         R,                    # per-arm levels (len M)
         lattice_edges=None,
-        mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
+        mu0=mu0, kappa0=kappa0, alpha0=alpha0, beta0=beta0,
         seed=None
     )
 
-    n_policies = mu.shape[1]
-    q = np.empty(n_policies, dtype=float)
+    output = dict()
 
-    for k in range(n_policies):
-        q[k] = ais_policy_quantile(
-            logw=logw,
-            mu_k=mu[:, k],
-            scale_k=scale[:, k],
-            df_k=df[:, k],
-            alpha=alpha,
-        )
+    for quantile in p:
+        n_policies = mu.shape[1]
+        q = np.empty(n_policies, dtype=float)
 
-    return {
-        "alpha": alpha,
-        "quantiles": q,
-        "logw": logw,
-        "mu": mu,
-        "sd": scale,
-        "df": df
-    }
+        for k in range(n_policies):
+            q[k] = ais_policy_quantile(
+                logw=logw,
+                mu_k=mu[:, k],
+                scale_k=scale[:, k],
+                df_k=df[:, k],
+                alpha=quantile,
+            )
+
+        output[f"{quantile}"] = q
+    
+    return output
