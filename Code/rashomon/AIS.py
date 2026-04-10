@@ -341,7 +341,7 @@ def sample_p0(buckets: P0BucketsWeightedS0, RPS: List[State], R_per: np.ndarray)
     rn = rng.random()
     s = _copy_state(random.choice(RPS))
     if rn > buckets.eps2:
-        beyond = True
+        beyond = False
         while beyond == False:
             s = _copy_state(random_state_jitter_from_RPS(RPS, R_per, 3))
             sig = state_signature(s)
