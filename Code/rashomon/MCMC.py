@@ -3,7 +3,7 @@ from rashomon.AIS import State
 import math, random, numpy as np, pandas as pd
 import matplotlib.pyplot as plt
 from collections import defaultdict
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Sequence
 import os
 import pickle
 from pathlib import Path
@@ -734,6 +734,7 @@ def run_mcmc_streaming(
 ):
     """
     Runs MH and appends every `thin`-th post-burn-in sample to out_jsonl immediately.
+    Start with a random initial state instead of informed RPS warm start
     """
     if seed is not None:
         np.random.seed(seed); random.seed(seed)
@@ -741,6 +742,72 @@ def run_mcmc_streaming(
     rng = np.random.default_rng(seed)
 
     x0 = init_from_RPS(RPS, log_alpha, rng)  # start in RPS (loss-weighted)
+    x = x0
+    accepts = 0
+    kept = 0
+
+    for fp in (out_jsonl, progress_json):
+        if fp and os.path.exists(fp):
+            os.remove(fp)
+    # open in append mode so you can resume / tail the file
+    with open(out_jsonl, "a", encoding="utf-8") as f:
+        for t in range(steps):
+            x, acc = mh_step_true_posterior(x, score_s, min_len=min_len)
+            accepts += acc
+
+            # keep sample on schedule
+            if t >= burnin and ((t - burnin) % thin == 0):
+                rec = {
+                    "iter": t,
+                    "state": _state_to_jsonable(x),
+                    "log_score": float(math.log(max(1e-300, score_s(x))))
+                }
+                f.write(json.dumps(rec) + "\n")
+                f.flush()  # ensures it’s on disk right away
+                kept += 1
+
+            # update progress every so often (e.g., every 200 iters)
+            if (t % 200) == 0:
+                prog = {
+                    "iter": t,
+                    "accept_rate_so_far": accepts / max(1, t+1),
+                    "kept_samples": kept,
+                    "burnin": burnin,
+                    "thin": thin,
+                    "steps": steps
+                }
+                with open(progress_json, "w", encoding="utf-8") as g:
+                    json.dump(prog, g)
+
+    return {"accept_rate": accepts / max(1, steps), "kept": kept, "out_jsonl": out_jsonl}
+
+def run_mcmc_streaming_rand_start(
+    profiles: Optional[List[Tuple[int, ...]]],
+    M: int,
+    R: Sequence[int],
+    score_s,
+    seed: Optional[int] = None,
+    steps: int = 50000,
+    burnin: int = 5000,
+    thin: int = 5,
+    min_len: int = 1,
+    out_jsonl: str = "mcmc_samples.jsonl",
+    progress_json: str = "mcmc_progress.json"
+):
+    """
+    Runs MH and appends every `thin`-th post-burn-in sample to out_jsonl immediately.
+    Start with a random initial state instead of informed RPS warm start
+    """
+    if seed is not None:
+        np.random.seed(seed); random.seed(seed)
+
+    rng = np.random.default_rng(seed)
+
+    x0 = AIS.random_partition_state_uniform_bits(
+        M=M,
+        R=R,
+        profiles=profiles
+    )  # start with random partition
     x = x0
     accepts = 0
     kept = 0

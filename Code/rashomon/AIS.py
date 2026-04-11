@@ -345,7 +345,7 @@ def sample_p0(buckets: P0BucketsWeightedS0, RPS: List[State], R_per: np.ndarray)
         while beyond == False:
             s = _copy_state(random_state_jitter_from_RPS(RPS, R_per, 3))
             sig = state_signature(s)
-            if sig in buckets.S0_set or sig in buckets.S1_sigs: 
+            if sig in buckets.S0_sigs or sig in buckets.S1_sigs: 
                 continue
             else:
                 beyond = True
@@ -736,6 +736,29 @@ def mh_step_state_uniform_neighbors(x: State, t: float,
     if math.log(random.random()+1e-300) < min(0.0, logr): return prop
     return x
 
+def mh_step_state_uniform_neighbors_parallel(x: State, t: float,
+                                    D, y, M, R, 
+                                    prof_idx_of_policy, 
+                                    all_policies, policy_means, reg,
+                                    log_p0: Callable[[State], float],
+                                    min_len:int=1
+                                    ) -> State:
+    """One step of MH used in each temperature step of the AIS, with the uniform neighborhood proposal"""
+    N_cur = [n for n in state_neighbors_ubs(x, min_len=min_len) if not states_equal(n, x)]
+    if not N_cur: return x
+    prop = random.choice(N_cur)
+    N_prop = [n for n in state_neighbors_ubs(prop, min_len=min_len) if not states_equal(n, prop)]
+    # def logpi_t(z: State) -> float:
+    #     lq = log_p0(z)
+    #     if lq==float("-inf"): return float("-inf")
+    #     return (1.0 - t)*lq + t*math.log(max(1e-300, score_s(z))) # target dist determined by t
+    lcur = (1.0 - t)*log_p0(x) + t*math.log(max(1e-300, score_s_expneg_raw(x, D, y, M, R, prof_idx_of_policy, all_policies, policy_means, reg)))
+    lprop = (1.0 - t)*log_p0(prop) + t*math.log(max(1e-300, score_s_expneg_raw(prop, D, y, M, R, prof_idx_of_policy, all_policies, policy_means, reg)))
+    if lprop == float("-inf"): return x
+    logr = (lprop-lcur) + math.log(max(1,len(N_cur))) - math.log(max(1,len(N_prop))) # matropolis hasting
+    if math.log(random.random()+1e-300) < min(0.0, logr): return prop
+    return x
+
 def run_ais_state(anchors: List[State],
                   score_s: Callable[[State], float],
                   cfg: AISConfig = AISConfig(),
@@ -855,6 +878,257 @@ def run_ais_state_streaming(
 
             terminals.append(_copy_state(x))
             logw[p]=lw
+
+    m=float(np.max(logw)); w=np.exp(logw-m)
+    return AISOutput(terminals, logw, w/w.sum(), ladder)
+
+def run_ais_state_streaming_from_data(
+    M, 
+    R, 
+    H, 
+    D, 
+    y, 
+    theta, 
+    reg,
+    eps1,
+    eps2,
+    score_s,
+    all_policies,
+    policy_means,
+    out_dir,
+    cfg,
+    tau_init: float = 1.0,
+    keep_in_memory: bool = True
+) -> Dict[str, List[Any]]:
+    ## redo the RPS steps
+    R_set, R_profiles = RAggregate(M, R, H, D, y, theta, reg, verbose=True)
+    anchors = build_anchor_states(R_set, R_profiles, M, R)
+    prof_idx_of_policy, profiles = build_profile_index_of_policy(all_policies, hasse.policy_to_profile)
+    RPS_states = raggregate_to_states((R_set, R_profiles), profiles)
+    log_alpha = [np.log(max(1e-300, score_s_expneg_raw(A, D, y, M, R, prof_idx_of_policy, all_policies, policy_means, reg))) for A in anchors]
+    buckets = make_p0_buckets_weighted_S0(RPS_states, np.asarray(R,int), log_alpha, eps1=eps1, eps2=eps2, min_len=cfg.min_len)
+    log_p0 = partial(log_p0_distance_weighted_S0_wrapper, buckets=buckets)
+    init_sampler = partial(
+        init_from_RPS_batch_wrapper,
+        RPS_states=RPS_states,
+        log_alpha=log_alpha,
+        rng_seed=777,
+    )
+
+    print("Running pilot adaptive ladder")
+    ladder, ess_ratios = pilot_adaptive_ladder(
+        init_sampler=init_sampler,
+        log_p0=log_p0,
+        score_s=score_s,
+        N=512,
+        ess_target=0.80,
+        beta0=0.0, beta1=1.0,
+        initial_delta=0.05,
+        min_delta=1e-3,
+        moves_per_probe=3,   # small mixing at each accepted β (optional)
+        min_len=1,
+        rng_seed=777
+    )
+
+    terminals=[]; logw=np.zeros(cfg.n_paths,float)
+    print("Adaptive ladder has", len(ladder), "levels; first 10:", ladder[:10])
+    print("Per-step ESS ratios (len =", len(ess_ratios), "):", ess_ratios[:10])
+
+    out_jsonl = os.path.join(out_dir, f"AIS_samples_{theta}.jsonl")
+    if out_jsonl and os.path.exists(out_jsonl):
+        os.remove(out_jsonl)
+
+    with open(out_jsonl, "a", encoding="utf-8") as f:
+        for p in range(cfg.n_paths):
+            # initial x from RPS by loss weights
+            x = sample_p0(buckets,RPS_states,R)
+            lw = 0.0                                                     # keep simple; add init-correction if you want
+
+            beta_prev = ladder[0]
+            for beta_cur in ladder[1:]:
+                # AIS weight increment
+                lq = log_p0(x)
+                lp = math.log(max(1e-300, score_s(x)))
+                lw += (beta_cur - beta_prev) * (lp - lq) # move to next ladder, update weight
+                # MH moves at level beta_cur
+                for _ in range(cfg.moves_per_level):
+                    x = mh_step_state_uniform_neighbors(x, beta_cur, log_p0, score_s, min_len=cfg.min_len)
+                    # proposal step, moves_per_level steps of MH movements
+                beta_prev = beta_cur
+
+            rec = {
+                    "iter": p,
+                    "state": MCMC._state_to_jsonable(x),
+                    "unnormalized_log_weight": lw
+                }
+            f.write(json.dumps(rec) + "\n")
+            f.flush()  # ensures it’s on disk right away
+
+            terminals.append(_copy_state(x))
+            logw[p]=lw
+
+    m=float(np.max(logw)); w=np.exp(logw-m)
+    return AISOutput(terminals, logw, w/w.sum(), ladder)
+
+### Parallel processing!!
+
+from multiprocessing import Pool, current_process
+
+def score_s_expneg_raw(state, D, y, M, R, prof_idx_of_policy, all_policies, policy_means, reg):
+    Q = global_loss_raw(
+        state=state,
+        D=D, y=y, M=M, R=R,
+        prof_idx_of_policy=prof_idx_of_policy,
+        policies=all_policies,
+        policy_means=policy_means,
+        reg=reg,
+        normalize=0,
+        lattice_edges=None,
+    )
+    return float(np.exp(-Q))
+
+def parallel_ais(
+    out_jsonl: str,
+    cfg,
+    buckets,
+    RPS_states,
+    R,
+    ladder,
+    log_p0,
+    x,D,y,M,
+    prof_idx_of_policy, 
+    all_policies, 
+    policy_means, reg,
+    seed
+):
+    
+    with open(out_jsonl, "a", encoding="utf-8") as f:
+        # initial x from RPS by loss weights
+        random.seed(seed)
+        x = sample_p0(buckets,RPS_states,R)
+        lw = 0.0                                                     # keep simple; add init-correction if you want
+
+        beta_prev = ladder[0]
+        for beta_cur in ladder[1:]:
+            # AIS weight increment
+            lq = log_p0(x)
+            lp = np.log(max(1e-300, score_s_expneg_raw(x, D, y, M, R, prof_idx_of_policy, all_policies, policy_means, reg)))
+            lw += (beta_cur - beta_prev) * (lp - lq) # move to next ladder, update weight
+            # MH moves at level beta_cur
+            for _ in range(cfg.moves_per_level):
+                x = mh_step_state_uniform_neighbors_parallel(x, beta_cur,
+                    D, y, M, R, 
+                    prof_idx_of_policy, 
+                    all_policies, policy_means, reg,
+                    log_p0,
+                    min_len=cfg.min_len)
+                # proposal step, moves_per_level steps of MH movements
+            beta_prev = beta_cur
+
+        rec = {
+                "state": MCMC._state_to_jsonable(x),
+                "unnormalized_log_weight": lw
+            }
+        f.write(json.dumps(rec) + "\n")
+        f.flush()  # ensures it’s on disk right away
+
+    return(_copy_state(x), lw)
+
+def parallel_ais_chunk(path_ids, out_jsonl, cfg, buckets, RPS_states, R, ladder,
+                       log_p0, x, D, y, M, prof_idx_of_policy,
+                       all_policies, policy_means, reg):
+    terminals = []
+    logw = []
+
+    for i in path_ids:
+        term_i, logw_i = parallel_ais(
+            out_jsonl, cfg, buckets, RPS_states, R, ladder, log_p0, x, D, y, M,
+            prof_idx_of_policy, all_policies, policy_means, reg,
+            seed=i   # if useful
+        )
+        terminals.append(term_i)
+        logw.append(logw_i)
+
+    return terminals, logw
+
+from functools import partial
+
+def log_p0_distance_weighted_S0_wrapper(z, buckets):
+    return log_p0_distance_weighted_S0(z, buckets)
+
+def init_from_RPS_batch_wrapper(N, RPS_states, log_alpha, rng_seed):
+    return MCMC.init_from_RPS_batch(RPS_states, log_alpha, N, rng_seed=rng_seed)
+
+def run_ais_streaming_from_data_parallel(
+    M, R, H, x, D, y, 
+    theta, reg, eps1, eps2,
+    score_s,
+    all_policies,
+    policy_means,
+    out_dir,
+    num_workers,
+    cfg,
+    tau_init: float = 1.0,
+    keep_in_memory: bool = True
+):
+    
+    ## redo the RPS steps
+    R_set, R_profiles = RAggregate(M, R, H, D, y, theta, reg, verbose=True)
+    anchors = build_anchor_states(R_set, R_profiles, M, R)
+    prof_idx_of_policy, profiles = build_profile_index_of_policy(all_policies, hasse.policy_to_profile)
+    RPS_states = raggregate_to_states((R_set, R_profiles), profiles)
+    log_alpha = [np.log(max(1e-300, score_s_expneg_raw(A, D, y, M, R, prof_idx_of_policy, all_policies, policy_means, reg))) for A in anchors]
+    buckets = make_p0_buckets_weighted_S0(RPS_states, np.asarray(R,int), log_alpha, eps1=eps1, eps2=eps2, min_len=cfg.min_len)
+    log_p0 = partial(log_p0_distance_weighted_S0_wrapper, buckets=buckets)
+    init_sampler = partial(
+        init_from_RPS_batch_wrapper,
+        RPS_states=RPS_states,
+        log_alpha=log_alpha,
+        rng_seed=777,
+    )
+
+    print("Running pilot adaptive ladder")
+    ladder, ess_ratios = pilot_adaptive_ladder(
+        init_sampler=init_sampler,
+        log_p0=log_p0,
+        score_s=score_s,
+        N=512,
+        ess_target=0.80,
+        beta0=0.0, beta1=1.0,
+        initial_delta=0.05,
+        min_delta=1e-3,
+        moves_per_probe=3,   # small mixing at each accepted β (optional)
+        min_len=1,
+        rng_seed=777
+    )
+
+    terminals=[]; logw=np.zeros(cfg.n_paths,float)
+    print("Adaptive ladder has", len(ladder), "levels; first 10:", ladder[:10])
+    print("Per-step ESS ratios (len =", len(ess_ratios), "):", ess_ratios[:10])
+
+    out_jsonl = os.path.join(out_dir, f"AIS_samples_{theta}.jsonl")
+    if out_jsonl and os.path.exists(out_jsonl):
+        os.remove(out_jsonl)
+
+    path_ids = list(range(cfg.n_paths))
+    chunks = np.array_split(path_ids, num_workers)
+
+    args = [
+        (chunk.tolist(), out_jsonl, cfg, buckets, RPS_states, R, ladder,
+        log_p0, x, D, y, M, prof_idx_of_policy, all_policies, policy_means, reg)
+        for chunk in chunks
+    ]
+
+    with Pool(num_workers) as p:
+        chunk_results = p.starmap(parallel_ais_chunk, args)
+
+    terminals = []
+    logw = []
+    for t_chunk, w_chunk in chunk_results:
+        terminals.extend(t_chunk)
+        logw.extend(w_chunk)
+
+    logw = np.array(logw)
 
     m=float(np.max(logw)); w=np.exp(logw-m)
     return AISOutput(terminals, logw, w/w.sum(), ladder)
@@ -1392,13 +1666,15 @@ def enumerate_all_states_and_losses(
     slices = prepare_profile_slices(policies, policy_means, prof_idx_of_policy, D, y)
     out = []
     ctr = 0
+    states = []
     for state in enumerate_all_states(profiles, R):
+        states.append(state)
         L = global_loss_raw(state, D, y, policies, policy_means, prof_idx_of_policy, M, R, reg=reg, normalize=normalize, lattice_edges=lattice_edges)
         out.append((state, L))
         ctr += 1
         if (max_states is not None) and (ctr >= max_states):
             break
-    return out
+    return (states, out)
 
 
 ###
@@ -1712,3 +1988,164 @@ def ais_quantiles_for_all_policies(
         output[f"{quantile}"] = q
     
     return output
+
+def extract_policy_posteriors_from_MCMC_RPS_sample(
+    states,
+    logw,
+    D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
+    M,
+    policies,                 # global policies list (len P)
+    prof_idx_of_policy,       # length-P array: global policy id -> profile k
+    R,                    # per-arm levels (len M)
+    lattice_edges=None,
+    mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
+    seed=None):
+    """
+    Parameters
+    ----------
+    ais_sample : list of dicts
+        Each element must have:
+          - rec["state"]
+          - rec["logw"]
+
+    Returns
+    -------
+    logw : ndarray, shape (n_particles,)
+    mu   : ndarray, shape (n_particles, n_policies)
+    sd   : ndarray, shape (n_particles, n_policies)
+    """
+    mu_list = []
+    scale_list = []
+    df_list = []
+
+    state_list = states
+
+    for state in state_list:
+        mu_i, scale_i, df_i = AIS.extract_policy_mu_sigma_nig(
+            state=state,                    # State: list[ProfilePart], length = num_profiles
+            D=D, y=y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
+            M=M,
+            policies=policies,                 # global policies list (len P)
+            prof_idx_of_policy=prof_idx_of_policy,       # length-P array: global policy id -> profile k
+            R_per=R,                    # per-arm levels (len M)
+            lattice_edges=None,
+            mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
+            seed=None
+        )
+
+        mu_list.append(mu_i)
+        scale_list.append(scale_i)
+        df_list.append(df_i)
+
+    logw = np.asarray(logw, dtype=float)
+    mu = np.asarray(mu_list, dtype=float)
+    scale = np.asarray(scale_list, dtype=float)
+    df = np.asarray(df_list, dtype=float)
+
+    return logw, mu, scale, df
+
+def quantiles_for_all_policies(
+    states,
+    logw,
+    D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
+    M,
+    policies,                 # global policies list (len P)
+    prof_idx_of_policy,       # length-P array: global policy id -> profile k
+    R,                    # per-arm levels (len M)
+    lattice_edges=None,
+    mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
+    p=[0.025, 0.5, 0.975],
+    seed=None):
+    """
+    Compute AIS posterior alpha-quantile for every policy.
+
+    Returns
+    -------
+    dict with:
+      - alpha
+      - quantiles : shape (n_policies,)
+      - logw, mu, sd
+    """
+    logw, mu, scale, df = extract_policy_posteriors_from_MCMC_RPS_sample(
+        states,
+        logw,
+        D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
+        M,
+        policies,                 # global policies list (len P)
+        prof_idx_of_policy,       # length-P array: global policy id -> profile k
+        R,                    # per-arm levels (len M)
+        lattice_edges=None,
+        mu0=mu0, kappa0=kappa0, alpha0=alpha0, beta0=beta0,
+        seed=None
+    )
+    output = dict()
+
+    for quantile in p:
+        n_policies = mu.shape[1]
+        q = np.empty(n_policies, dtype=float)
+
+        for k in range(n_policies):
+            q[k] = AIS.ais_policy_quantile(
+                logw=logw,
+                mu_k=mu[:, k],
+                scale_k=scale[:, k],
+                df_k=df[:, k],
+                alpha=quantile,
+            )
+
+        output[f"{quantile}"] = q
+    
+    return output
+
+def random_partition_state_uniform_bits(
+    M: int,
+    R: Sequence[int],
+    seed: Optional[int] = None,
+    profiles: Optional[List[Tuple[int, ...]]] = None
+) -> State:
+    """
+    Randomly generate a global partition State with each editable position (finite entry)
+    having equal probability to be 0 or 1.
+
+    - Constructs profiles as all 2^M binary cov_id tuples unless `profiles` is provided.
+    - For each profile:
+        * active arms are where cov_ids[m]==1
+        * for each active arm m, generate a row of length (R_m - 2) with iid Bernoulli(p_one)
+        * rows are padded with +inf to rectangular ndarray
+        * if no active arms or all active arms have R_m<=2 -> B=None
+    """
+    p_one = 0.5
+    rng = np.random.default_rng(seed)
+    R = np.asarray(R, dtype=int)
+    if R.size != M:
+        raise ValueError("R must be length M")
+    C_per = np.maximum(R - 2, 0)
+
+    out: State = []
+    for cov_ids in profiles:
+        cov = np.asarray(cov_ids, dtype=int)
+        if cov.size != M:
+            raise ValueError("each cov_ids must be length M")
+        active = np.flatnonzero(cov == 1)
+
+        rows = []
+        for m in active:
+            c = int(C_per[m])
+            if c <= 0:
+                continue
+            row = (rng.random(c) < p_one).astype(float)  # 0/1 with equal prob when p_one=0.5
+            rows.append(row)
+
+        if not rows:
+            B = None
+        else:
+            W = max(r.size for r in rows)
+            padded = [
+                r if r.size == W else np.pad(r, (0, W - r.size), constant_values=np.inf)
+                for r in rows
+            ]
+            B = np.vstack(padded).astype(float)
+
+        out.append(ProfilePart(cov_ids=tuple(cov.tolist()), B=B))
+
+    return out
