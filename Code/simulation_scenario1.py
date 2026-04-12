@@ -8,19 +8,18 @@ from copy import deepcopy
 from rashomon import hasse, extract_pools, loss, aggregate, AIS, MCMC
 
 def main():
-    statistic = "mean"
+    epoch = 1 # from 1 to 5 to divide the 50 iter into 5 times
 
-    # N_ITER = 30000
-    # N_BURN = 10000
-    # N_THIN = 10
-    # n_paths = 300
-    # n_levels = 20
-
-    N_ITER = 110
-    N_BURN = 10
-    N_THIN = 1
-    n_paths=30
-    n_levels=5
+    N_ITER = 30000
+    N_BURN = 10000
+    N_THIN = 10
+    n_paths = 300
+    n_levels = 20
+    # N_ITER = 110
+    # N_BURN = 10
+    # N_THIN = 1
+    # n_paths=30
+    # n_levels=5
 
     moves_per_level=5
     num_samples_per_feature=500
@@ -133,7 +132,8 @@ def main():
 
     overall_result = []
 
-    for iter in range(50):
+    # use iter = 1:10, 11:20 ...
+    for iter in range(10*(epoch-1)+1,10*epoch+1):
         np.random.seed(iter*42)
         X, D, y = generate_data(mu, var, num_samples_per_feature, all_policies, pi_policies, M)
         policy_means = loss.compute_policy_means(D, y, num_policies)
@@ -154,62 +154,125 @@ def main():
 
         result = dict()
 
-        if statistic == "mean":
-            ### MCMC
+        ### MCMC
+        start = time.time()
+        MCMC.run_mcmc_streaming_rand_start(
+            profiles = profiles,
+            M = M,
+            R = R,
+            score_s = score_s,
+            seed = None,
+            steps = N_ITER,
+            burnin = N_BURN,
+            thin = N_THIN,
+            min_len = 1,
+            out_jsonl = "./output_files/mcmc_samples.jsonl",
+            progress_json = "./output_files/mcmc_progress.json"
+        )
+
+        mcmc_res = MCMC.load_mcmc_res_from_jsonl("./output_files/mcmc_samples.jsonl")
+
+        MCMC_post_mean = MCMC.policy_means_matrix_from_mcmc(
+            mcmc_res["samples"],                      # mcmc_res["samples"]
+            all_policies,                     # global list/array of policies (length P)
+            policy_means,                 # np.ndarray [P,2] = [sum_y, count]
+            prof_idx_of_policy,           # length-P array: policy_id -> profile k
+            R,                        # np.ndarray of arm levels (includes control)
+            M,
+            lattice_edges=None,           # pass None if unused
+            policy_labels=None            # optional column names; defaults to policy indices (0..P-1)
+        )
+
+        log_weight = np.log(np.repeat(1/len(mcmc_res["samples"]), len(mcmc_res["samples"])))
+
+        mcmc_summ = MCMC.quantiles_for_all_policies(
+            mcmc_res["samples"],
+            log_weight,
+            D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
+            M,
+            all_policies,                 # global policies list (len P)
+            prof_idx_of_policy,       # length-P array: global policy id -> profile k
+            R,                    # per-arm levels (len M)
+            lattice_edges=None,
+            mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
+            p=[0.025,0.5,0.975], 
+            seed=None
+        )
+
+        result["MCMC_quantiles"] = mcmc_summ
+
+        end = time.time()
+
+        result["MCMC_time"] = end - start
+        result["MCMC"] = np.mean(MCMC_post_mean, axis=0)
+
+        ### Exact:
+        start = time.time()
+
+        all_partitions, losses = AIS.enumerate_all_states_and_losses(
+            profiles=profiles,
+            R=R,
+            M=M,
+            policies=all_policies,
+            policy_means=policy_means,
+            prof_idx_of_policy=prof_idx_of_policy,
+            D=D, y=y,
+            reg=lamb, normalize=0,
+            lattice_edges=None,
+            max_states=None  # or an integer cap to safeguard
+        )
+
+        true_log_post = [-i[1] for i in losses]
+
+        exact_post_mean = AIS.estimate_policy_means_from_RPS(
+            all_partitions,                     # dict with key "samples": List[State]
+            true_log_post,
+            all_policies,                     # global policy list (length P)
+            policy_means,                 # np.ndarray [P,2] = [sum_y, count]
+            prof_idx_of_policy,           # length-P array: policy_id -> profile k, for 36 policies, which profile is each policy in
+            R,                        # np.ndarray of arm levels (includes control)
+            M,
+            lattice_edges=None            # optional lattice; pass None if unused
+        )
+
+        exact_summ = MCMC.quantiles_for_all_policies(
+            all_partitions,
+            true_log_post,
+            D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
+            M,
+            all_policies,                 # global policies list (len P)
+            prof_idx_of_policy,       # length-P array: global policy id -> profile k
+            R,                    # per-arm levels (len M)
+            lattice_edges=None,
+            mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
+            p=[0.025,0.5,0.975], 
+            seed=None
+        )
+
+        result["exact_quantiles"] = exact_summ
+
+        end = time.time()
+
+        result["exact_time"] = end-start
+        result["exact"] = exact_post_mean
+
+        ### AIS / RPS
+
+        for theta in [7.8, 8, 8.2, 8.4, 8.6]:
             start = time.time()
-            MCMC.run_mcmc_streaming_rand_start(
-                profiles = profiles,
-                M = M,
-                R = R,
-                score_s = score_s,
-                seed = None,
-                steps = N_ITER,
-                burnin = N_BURN,
-                thin = N_THIN,
-                min_len = 1,
-                out_jsonl = "./output_files/mcmc_samples.jsonl",
-                progress_json = "./output_files/mcmc_progress.json"
-            )
+            H = np.inf
+            R_set, R_profiles = aggregate.RAggregate(M, R, H, D, y, theta, reg=lamb, verbose=True)
 
-            mcmc_res = MCMC.load_mcmc_res_from_jsonl("./output_files/mcmc_samples.jsonl")
+            anchors = AIS.build_anchor_states(R_set, R_profiles, M, R)
+            prof_idx_of_policy, profiles = AIS.build_profile_index_of_policy(all_policies, hasse.policy_to_profile)
 
-            MCMC_post_mean = MCMC.policy_means_matrix_from_mcmc(
-                mcmc_res["samples"],                      # mcmc_res["samples"]
-                all_policies,                     # global list/array of policies (length P)
-                policy_means,                 # np.ndarray [P,2] = [sum_y, count]
-                prof_idx_of_policy,           # length-P array: policy_id -> profile k
-                R,                        # np.ndarray of arm levels (includes control)
-                M,
-                lattice_edges=None,           # pass None if unused
-                policy_labels=None            # optional column names; defaults to policy indices (0..P-1)
-            )
+            RPS_states = AIS.raggregate_to_states((R_set, R_profiles), profiles)
 
-            end = time.time()
+            log_alpha = [np.log(max(1e-300, score_s(A))) for A in anchors]
 
-            result["MCMC_time"] = end - start
-            result["MCMC"] = np.mean(MCMC_post_mean, axis=0)
-
-            ### Exact:
-            start = time.time()
-
-            all_partitions, losses = AIS.enumerate_all_states_and_losses(
-                profiles=profiles,
-                R=R,
-                M=M,
-                policies=all_policies,
-                policy_means=policy_means,
-                prof_idx_of_policy=prof_idx_of_policy,
-                D=D, y=y,
-                reg=lamb, normalize=0,
-                lattice_edges=None,
-                max_states=None  # or an integer cap to safeguard
-            )
-
-            true_log_post = [-i[1] for i in losses]
-
-            exact_post_mean = AIS.estimate_policy_means_from_RPS(
-                all_partitions,                     # dict with key "samples": List[State]
-                true_log_post,
+            RPS_post_mean = AIS.estimate_policy_means_from_RPS(
+                RPS_states,                     # dict with key "samples": List[State]
+                log_alpha,
                 all_policies,                     # global policy list (length P)
                 policy_means,                 # np.ndarray [P,2] = [sum_y, count]
                 prof_idx_of_policy,           # length-P array: policy_id -> profile k, for 36 policies, which profile is each policy in
@@ -218,82 +281,83 @@ def main():
                 lattice_edges=None            # optional lattice; pass None if unused
             )
 
+            RPS_summ = MCMC.quantiles_for_all_policies(
+                RPS_states,
+                log_alpha,
+                D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
+                M,
+                all_policies,                 # global policies list (len P)
+                prof_idx_of_policy,       # length-P array: global policy id -> profile k
+                R,                    # per-arm levels (len M)
+                lattice_edges=None,
+                mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
+                p=[0.025,0.5,0.975], 
+                seed=None
+            )
+
+            result["RPS_quantiles"] = RPS_summ
+
+            end = time.time()
+            
+            result[f"RPS_{theta}_time"] = end-start
+            result[f"RPS_{theta}"] = RPS_post_mean
+
+
+            start = time.time()
+            cfg = AIS.AISConfig(n_paths=n_paths, n_levels=n_levels, moves_per_level=moves_per_level, min_len=1, seed=2)
+            ais_out = AIS.run_ais_streaming_from_data_parallel(
+                M, 
+                R, 
+                H, 
+                x,
+                D, 
+                y, 
+                theta, 
+                reg=lamb,
+                eps1=0.5,
+                eps2=0.75,
+                all_policies=all_policies,
+                policy_means=policy_means,
+                score_s=score_s,
+                out_dir="./output_files",
+                num_workers=6,
+                cfg = cfg,
+            )
+
+            summ = AIS.ais_quantiles_for_all_policies(
+                ais_out,
+                D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
+                M,
+                all_policies,                 # global policies list (len P)
+                prof_idx_of_policy,       # length-P array: global policy id -> profile k
+                R,                    # per-arm levels (len M)
+                lattice_edges=None,
+                mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
+                p=[0.025,0.5,0.975], # make this a vector
+                seed=None
+            )
+
+            result[f"AIS_{theta}_quantiles"] = summ
+
+            mu_hat = AIS.estimate_policy_means_from_ais(
+                ais_out=ais_out,                 # from your run_ais_state
+                all_policies=all_policies,
+                policy_means=policy_means,
+                prof_idx_of_policy=prof_idx_of_policy,
+                lattice_edges=None,                  # or the hasse edges if you use them
+                R_per = R,
+                M=M
+            )
+
             end = time.time()
 
-            result["exact_time"] = end-start
-            result["exact"] = exact_post_mean
+            result[f"AIS_{theta}_time"] = end - start
+            result[f"AIS_{theta}"] = mu_hat
 
-            ### AIS / RPS
+    overall_result.append(result)
 
-            for theta in [7.8, 8, 8.2, 8.4, 8.6]:
-                start = time.time()
-                H = np.inf
-                R_set, R_profiles = aggregate.RAggregate(M, R, H, D, y, theta, reg=lamb, verbose=True)
-
-                anchors = AIS.build_anchor_states(R_set, R_profiles, M, R)
-                prof_idx_of_policy, profiles = AIS.build_profile_index_of_policy(all_policies, hasse.policy_to_profile)
-
-                RPS_states = AIS.raggregate_to_states((R_set, R_profiles), profiles)
-
-                log_alpha = [np.log(max(1e-300, score_s(A))) for A in anchors]
-
-                RPS_post_mean = AIS.estimate_policy_means_from_RPS(
-                    RPS_states,                     # dict with key "samples": List[State]
-                    log_alpha,
-                    all_policies,                     # global policy list (length P)
-                    policy_means,                 # np.ndarray [P,2] = [sum_y, count]
-                    prof_idx_of_policy,           # length-P array: policy_id -> profile k, for 36 policies, which profile is each policy in
-                    R,                        # np.ndarray of arm levels (includes control)
-                    M,
-                    lattice_edges=None            # optional lattice; pass None if unused
-                )
-
-                end = time.time()
-                
-                result[f"RPS_{theta}_time"] = end-start
-                result[f"RPS_{theta}"] = RPS_post_mean
-
-
-                start = time.time()
-                cfg = AIS.AISConfig(n_paths=n_paths, n_levels=n_levels, moves_per_level=moves_per_level, min_len=1, seed=2)
-                ais_out = AIS.run_ais_streaming_from_data_parallel(
-                    M, 
-                    R, 
-                    H, 
-                    x,
-                    D, 
-                    y, 
-                    theta, 
-                    reg=lamb,
-                    eps1=0.5,
-                    eps2=0.75,
-                    all_policies=all_policies,
-                    policy_means=policy_means,
-                    score_s=score_s,
-                    out_dir="./output_files",
-                    num_workers=6,
-                    cfg = cfg,
-                )
-
-                mu_hat = AIS.estimate_policy_means_from_ais(
-                    ais_out=ais_out,                 # from your run_ais_state
-                    all_policies=all_policies,
-                    policy_means=policy_means,
-                    prof_idx_of_policy=prof_idx_of_policy,
-                    lattice_edges=None,                  # or the hasse edges if you use them
-                    R_per = R,
-                    M=M
-                )
-
-                end = time.time()
-
-                result[f"AIS_{theta}_time"] = end - start
-                result[f"AIS_{theta}"] = mu_hat
-
-        overall_result.append(result)
-
-    with open("./output/sim1_result.pkl", "wb") as f:
-        pickle.dump(result, f)
+    with open(f"./output/sim1_result{epoch}.pkl", "wb") as f:
+        pickle.dump(overall_result, f)
     
 if __name__ == "__main__":
     main()

@@ -1816,10 +1816,7 @@ def extract_policy_posteriors_from_ais_sample(
     """
     Parameters
     ----------
-    ais_sample : list of dicts
-        Each element must have:
-          - rec["state"]
-          - rec["logw"]
+    ais_sample : AISOutput
 
     Returns
     -------
@@ -1832,8 +1829,8 @@ def extract_policy_posteriors_from_ais_sample(
     scale_list = []
     df_list = []
 
-    state_list = ais_sample["terminals"]
-    lw_list = ais_sample["logw"]
+    state_list = ais_sample.terminals
+    lw_list = ais_sample.logw
 
     for state, lw in zip(state_list, lw_list):
         mu_i, scale_i, df_i = extract_policy_mu_sigma_nig(

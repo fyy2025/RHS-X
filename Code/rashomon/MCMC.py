@@ -901,15 +901,13 @@ def extract_policy_posteriors_from_MCMC_RPS_sample(
     mu   : ndarray, shape (n_particles, n_policies)
     sd   : ndarray, shape (n_particles, n_policies)
     """
-    logw = []
     mu_list = []
     scale_list = []
     df_list = []
 
     state_list = states
-    lw_list = logw
 
-    for state, lw in zip(state_list, lw_list):
+    for state in state_list:
         mu_i, scale_i, df_i = AIS.extract_policy_mu_sigma_nig(
             state=state,                    # State: list[ProfilePart], length = num_profiles
             D=D, y=y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
@@ -922,7 +920,6 @@ def extract_policy_posteriors_from_MCMC_RPS_sample(
             seed=None
         )
 
-        logw.append(lw)
         mu_list.append(mu_i)
         scale_list.append(scale_i)
         df_list.append(df_i)
@@ -969,7 +966,6 @@ def quantiles_for_all_policies(
         mu0=mu0, kappa0=kappa0, alpha0=alpha0, beta0=beta0,
         seed=None
     )
-
     output = dict()
 
     for quantile in p:
