@@ -1,5 +1,6 @@
 import time
 import pickle
+import argparse
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -8,7 +9,14 @@ from copy import deepcopy
 from rashomon import hasse, extract_pools, loss, aggregate, AIS, MCMC
 
 def main():
-    epoch = 1 # from 1 to 5 to divide the 50 iter into 5 times
+
+    # Set up argument parser
+    parser = argparse.ArgumentParser(description="Run AIS MCMC simulation")
+    parser.add_argument('--epoch', type=int, required=True, help="Epoch number to run")
+    args = parser.parse_args()
+
+    epoch = args.epoch
+    print(f"Starting execution for epoch: {epoch}")
 
     N_ITER = 30000
     N_BURN = 10000
@@ -195,7 +203,7 @@ def main():
             R,                    # per-arm levels (len M)
             lattice_edges=None,
             mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
-            p=[0.025,0.5,0.975], 
+            p=[0.025,0.5,0.975],
             seed=None
         )
 
@@ -245,7 +253,7 @@ def main():
             R,                    # per-arm levels (len M)
             lattice_edges=None,
             mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
-            p=[0.025,0.5,0.975], 
+            p=[0.025,0.5,0.975],
             seed=None
         )
 
@@ -291,14 +299,14 @@ def main():
                 R,                    # per-arm levels (len M)
                 lattice_edges=None,
                 mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
-                p=[0.025,0.5,0.975], 
+                p=[0.025,0.5,0.975],
                 seed=None
             )
 
             result["RPS_quantiles"] = RPS_summ
 
             end = time.time()
-            
+
             result[f"RPS_{theta}_time"] = end-start
             result[f"RPS_{theta}"] = RPS_post_mean
 
@@ -306,13 +314,13 @@ def main():
             start = time.time()
             cfg = AIS.AISConfig(n_paths=n_paths, n_levels=n_levels, moves_per_level=moves_per_level, min_len=1, seed=2)
             ais_out = AIS.run_ais_streaming_from_data_parallel(
-                M, 
-                R, 
-                H, 
+                M,
+                R,
+                H,
                 x,
-                D, 
-                y, 
-                theta, 
+                D,
+                y,
+                theta,
                 reg=lamb,
                 eps1=0.5,
                 eps2=0.75,
@@ -320,7 +328,7 @@ def main():
                 policy_means=policy_means,
                 score_s=score_s,
                 out_dir="./output_files",
-                num_workers=6,
+                num_workers=1,
                 cfg = cfg,
             )
 
@@ -358,6 +366,6 @@ def main():
 
     with open(f"./output/sim1_result{epoch}.pkl", "wb") as f:
         pickle.dump(overall_result, f)
-    
+
 if __name__ == "__main__":
     main()
