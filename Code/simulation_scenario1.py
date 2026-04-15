@@ -174,11 +174,11 @@ def main():
             burnin = N_BURN,
             thin = N_THIN,
             min_len = 1,
-            out_jsonl = "./output_files/mcmc_samples.jsonl",
-            progress_json = "./output_files/mcmc_progress.json"
+            out_jsonl = f"./output_files/mcmc_samples{epoch}.jsonl",
+            progress_json = f"./output_files/mcmc_progress{epoch}.json"
         )
 
-        mcmc_res = MCMC.load_mcmc_res_from_jsonl("./output_files/mcmc_samples.jsonl")
+        mcmc_res = MCMC.load_mcmc_res_from_jsonl(f"./output_files/mcmc_samples{epoch}.jsonl")
 
         MCMC_post_mean = MCMC.policy_means_matrix_from_mcmc(
             mcmc_res["samples"],                      # mcmc_res["samples"]
@@ -314,6 +314,7 @@ def main():
             start = time.time()
             cfg = AIS.AISConfig(n_paths=n_paths, n_levels=n_levels, moves_per_level=moves_per_level, min_len=1, seed=2)
             ais_out = AIS.run_ais_streaming_from_data_parallel(
+                epoch,
                 M,
                 R,
                 H,

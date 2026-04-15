@@ -1060,6 +1060,7 @@ def init_from_RPS_batch_wrapper(N, RPS_states, log_alpha, rng_seed):
     return MCMC.init_from_RPS_batch(RPS_states, log_alpha, N, rng_seed=rng_seed)
 
 def run_ais_streaming_from_data_parallel(
+    epoch,
     M, R, H, x, D, y, 
     theta, reg, eps1, eps2,
     score_s,
@@ -1106,7 +1107,7 @@ def run_ais_streaming_from_data_parallel(
     print("Adaptive ladder has", len(ladder), "levels; first 10:", ladder[:10])
     print("Per-step ESS ratios (len =", len(ess_ratios), "):", ess_ratios[:10])
 
-    out_jsonl = os.path.join(out_dir, f"AIS_samples_{theta}.jsonl")
+    out_jsonl = os.path.join(out_dir, f"AIS_samples_{theta}_{epoch}.jsonl")
     if out_jsonl and os.path.exists(out_jsonl):
         os.remove(out_jsonl)
 
