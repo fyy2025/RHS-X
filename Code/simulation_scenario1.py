@@ -363,7 +363,7 @@ def main():
             result[f"AIS_{theta}_time"] = end - start
             result[f"AIS_{theta}"] = mu_hat
 
-    overall_result.append(result)
+        overall_result.append(result)
 
     with open(f"./output/sim1_result{epoch}.pkl", "wb") as f:
         pickle.dump(overall_result, f)
