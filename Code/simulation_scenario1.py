@@ -18,8 +18,8 @@ def main():
     epoch = args.epoch
     print(f"Starting execution for epoch: {epoch}")
 
-    N_ITER = 30000
-    N_BURN = 10000
+    N_ITER = 50000
+    N_BURN = 20000
     N_THIN = 10
     n_paths = 300
     n_levels = 20
