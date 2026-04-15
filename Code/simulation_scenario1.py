@@ -303,7 +303,7 @@ def main():
                 seed=None
             )
 
-            result["RPS_quantiles"] = RPS_summ
+            result[f"RPS_{theta}_quantiles"] = RPS_summ
 
             end = time.time()
 
