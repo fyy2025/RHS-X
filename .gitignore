@@ -1,3 +1,6 @@
+# ignore directories under Code
+Code/hyak
+
 # Manual package installs
 Code/CTL
 
