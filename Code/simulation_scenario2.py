@@ -34,8 +34,8 @@ def main():
 
     lamb=1
 
-    M = 2
-    R = np.array([4, 3])
+    M = 3
+    R = np.array([4, 3, 3])
 
     num_profiles = 2**M
     profiles, profile_map = hasse.enumerate_profiles(M)
@@ -43,32 +43,54 @@ def main():
     all_policies = hasse.enumerate_policies(M, R)
     num_policies = len(all_policies)
 
-    sigma_00 = None
-    mu_00 = np.array([0])
-    # mu_00 = np.array([5])
-    var_00 = np.array([1])
+    # Profile (0, 0, 0)
+    sigma_000 = None
+    mu_000 = np.array([0])
+    var_000 = np.array([1])
 
-    # Profile (0, 1)
-    sigma_01 = np.array([[1]])
-    mu_01 = np.array([-1])
-    # mu_01 = np.array([10])
-    var_01 = np.array([1])
+    # Profile (0, 0, 1)
+    sigma_001 = np.array([[1]])
+    mu_001 = np.array([-2])
+    var_001 = np.array([1])
 
-    # Profile (1, 0)
-    sigma_10 = np.array([[1, 0]])
-    mu_10 = np.array([-2, -3])
-    # mu_10 = np.array([-10, 15])
-    var_10 = np.array([1, 1])
+    # Profile (0, 1, 0)
+    sigma_010 = np.array([[1]])
+    mu_010 = np.array([-1.5])
+    var_010 = np.array([1])
 
-    # Profile (1, 1)
-    sigma_11 = np.array([[0, 1], [0, np.inf]])
-    mu_11 = np.array([2, 3, -1, 1])
-    # mu_11 = np.array([20, 30, 5, 10])
-    var_11 = np.array([1, 1, 1, 1])
+    # Profile (0, 1, 1)
+    sigma_011 = np.array([[1], [0]])
+    mu_011 = np.array([-1, 2])
+    var_011 = np.array([1, 1])
 
-    sigma = [sigma_00, sigma_01, sigma_10, sigma_11]
-    mu = [mu_00, mu_01, mu_10, mu_11]
-    var = [var_00, var_01, var_10, var_11]
+    # Profile (1, 0, 0)
+    sigma_100 = np.array([[0, 1]])
+    mu_100 = np.array([-1.5, 1])
+    var_100 = np.array([1, 1])
+
+    # Profile (1, 0, 1)
+    sigma_101 = np.array([[0, 1], [0, np.inf]])
+    mu_101 = np.array([-0.5, 2.5, 1.5, -2.5])
+    var_101 = np.array([1, 1, 1, 1])
+
+    # Profile (1, 1, 0)
+    sigma_110 = np.array([[0, 1], [1, np.inf]])
+    mu_110 = np.array([0, -2.5])
+    var_110 = np.array([1, 1])
+
+    # Profile (1, 1, 1)
+    sigma_111 = np.array([[0, 1], [1, np.inf], [0, np.inf]])
+    mu_111 = np.array([3, -0.5, -1.5, -2])
+    var_111 = np.array([1, 1, 1, 1])
+
+    sigma = [sigma_000, sigma_001, sigma_010, sigma_011,
+                sigma_100, sigma_101, sigma_110, sigma_111]
+
+    mu = [mu_000, mu_001, mu_010, mu_011,
+            mu_100, mu_101, mu_110, mu_111]
+
+    var = [var_000, var_001, var_010, var_011,
+            var_100, var_101, var_110, var_111]
 
     policies_profiles = {}
     policies_profiles_masked = {}
@@ -141,6 +163,7 @@ def main():
     overall_result = []
 
     # use iter = 1:10, 11:20 ...
+    
     for iter in range(10*(epoch-1)+1,10*epoch+1):
         np.random.seed(iter*42)
         X, D, y = generate_data(mu, var, num_samples_per_feature, all_policies, pi_policies, M)
@@ -174,11 +197,11 @@ def main():
             burnin = N_BURN,
             thin = N_THIN,
             min_len = 1,
-            out_jsonl = f"./output_files/mcmc_samples{epoch}.jsonl",
-            progress_json = f"./output_files/mcmc_progress{epoch}.json"
+            out_jsonl = f"./output_files2/mcmc_samples{epoch}.jsonl",
+            progress_json = f"./output_files2/mcmc_progress{epoch}.json"
         )
 
-        mcmc_res = MCMC.load_mcmc_res_from_jsonl(f"./output_files/mcmc_samples{epoch}.jsonl")
+        mcmc_res = MCMC.load_mcmc_res_from_jsonl(f"./output_files2/mcmc_samples{epoch}.jsonl")
 
         MCMC_post_mean = MCMC.policy_means_matrix_from_mcmc(
             mcmc_res["samples"],                      # mcmc_res["samples"]
@@ -215,58 +238,58 @@ def main():
         result["MCMC"] = np.mean(MCMC_post_mean, axis=0)
 
         ### Exact:
-        start = time.time()
+        # start = time.time()
 
-        all_partitions, losses = AIS.enumerate_all_states_and_losses(
-            profiles=profiles,
-            R=R,
-            M=M,
-            policies=all_policies,
-            policy_means=policy_means,
-            prof_idx_of_policy=prof_idx_of_policy,
-            D=D, y=y,
-            reg=lamb, normalize=0,
-            lattice_edges=None,
-            max_states=None  # or an integer cap to safeguard
-        )
+        # all_partitions, losses = AIS.enumerate_all_states_and_losses(
+        #     profiles=profiles,
+        #     R=R,
+        #     M=M,
+        #     policies=all_policies,
+        #     policy_means=policy_means,
+        #     prof_idx_of_policy=prof_idx_of_policy,
+        #     D=D, y=y,
+        #     reg=lamb, normalize=0,
+        #     lattice_edges=None,
+        #     max_states=None  # or an integer cap to safeguard
+        # )
 
-        true_log_post = [-i[1] for i in losses]
+        # true_log_post = [-i[1] for i in losses]
 
-        exact_post_mean = AIS.estimate_policy_means_from_RPS(
-            all_partitions,                     # dict with key "samples": List[State]
-            true_log_post,
-            all_policies,                     # global policy list (length P)
-            policy_means,                 # np.ndarray [P,2] = [sum_y, count]
-            prof_idx_of_policy,           # length-P array: policy_id -> profile k, for 36 policies, which profile is each policy in
-            R,                        # np.ndarray of arm levels (includes control)
-            M,
-            lattice_edges=None            # optional lattice; pass None if unused
-        )
+        # exact_post_mean = AIS.estimate_policy_means_from_RPS(
+        #     all_partitions,                     # dict with key "samples": List[State]
+        #     true_log_post,
+        #     all_policies,                     # global policy list (length P)
+        #     policy_means,                 # np.ndarray [P,2] = [sum_y, count]
+        #     prof_idx_of_policy,           # length-P array: policy_id -> profile k, for 36 policies, which profile is each policy in
+        #     R,                        # np.ndarray of arm levels (includes control)
+        #     M,
+        #     lattice_edges=None            # optional lattice; pass None if unused
+        # )
 
-        exact_summ = MCMC.quantiles_for_all_policies(
-            all_partitions,
-            true_log_post,
-            D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
-            M,
-            all_policies,                 # global policies list (len P)
-            prof_idx_of_policy,       # length-P array: global policy id -> profile k
-            R,                    # per-arm levels (len M)
-            lattice_edges=None,
-            mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
-            p=[0.025,0.5,0.975],
-            seed=None
-        )
+        # exact_summ = MCMC.quantiles_for_all_policies(
+        #     all_partitions,
+        #     true_log_post,
+        #     D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
+        #     M,
+        #     all_policies,                 # global policies list (len P)
+        #     prof_idx_of_policy,       # length-P array: global policy id -> profile k
+        #     R,                    # per-arm levels (len M)
+        #     lattice_edges=None,
+        #     mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
+        #     p=[0.025,0.5,0.975],
+        #     seed=None
+        # )
 
-        result["exact_quantiles"] = exact_summ
+        # result["exact_quantiles"] = exact_summ
 
-        end = time.time()
+        # end = time.time()
 
-        result["exact_time"] = end-start
-        result["exact"] = exact_post_mean
+        # result["exact_time"] = end-start
+        # result["exact"] = exact_post_mean
 
         ### AIS / RPS
 
-        for theta in [7.8, 8, 8.2, 8.4, 8.6]:
+        for theta in [13, 13.1, 13.2, 13.3, 13.4]:
             start = time.time()
             H = np.inf
             R_set, R_profiles = aggregate.RAggregate(M, R, H, D, y, theta, reg=lamb, verbose=True)
@@ -328,7 +351,7 @@ def main():
                 all_policies=all_policies,
                 policy_means=policy_means,
                 score_s=score_s,
-                out_dir="./output_files",
+                out_dir="./output_files2",
                 num_workers=1,
                 cfg = cfg,
             )
@@ -365,7 +388,7 @@ def main():
 
         overall_result.append(result)
 
-    with open(f"./output/sim1_result{epoch}.pkl", "wb") as f:
+    with open(f"./output2/sim1_result{epoch}.pkl", "wb") as f:
         pickle.dump(overall_result, f)
 
 if __name__ == "__main__":
