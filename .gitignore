@@ -1,5 +1,6 @@
 # ignore directories under Code
 Code/hyak
+Code/notebooks
 
 # Manual package installs
 Code/CTL
