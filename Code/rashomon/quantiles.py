@@ -19,6 +19,7 @@ def q_mixture_t_root(k, w, mu, s, df, prob, xtol=1e-8, maxiter=100):
     # 1. Sanitize and broadcast inputs
     w = np.asarray(w, dtype=np.float64)
     w = w / np.sum(w) # Ensure weights sum to 1
+    w = np.expand_dims(w, axis=1)    
     mu = np.asarray(mu, dtype=np.float64)
     s = np.asarray(s, dtype=np.float64)
     prob = np.atleast_1d(prob)

@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 # compute_Q(D, y, sigma, policies, policy_means, reg=1, normalize=0, lattice_edges=None) -> float
 from rashomon.loss import compute_Q as _compute_Q
 from rashomon.aggregate.raggregate import RAggregate          # (variant A)
-from rashomon import hasse, extract_pools, loss
+from rashomon import hasse, extract_pools, loss, quantiles
 
 ###
 # 1) State + anchor materialization
@@ -1987,64 +1987,8 @@ def ais_quantiles_for_all_policies(
     
     return output
 
-def extract_policy_posteriors_from_MCMC_RPS_sample(
-    states,
-    logw,
-    D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
-    M,
-    policies,                 # global policies list (len P)
-    prof_idx_of_policy,       # length-P array: global policy id -> profile k
-    R,                    # per-arm levels (len M)
-    lattice_edges=None,
-    mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
-    seed=None):
-    """
-    Parameters
-    ----------
-    ais_sample : list of dicts
-        Each element must have:
-          - rec["state"]
-          - rec["logw"]
-
-    Returns
-    -------
-    logw : ndarray, shape (n_particles,)
-    mu   : ndarray, shape (n_particles, n_policies)
-    sd   : ndarray, shape (n_particles, n_policies)
-    """
-    mu_list = []
-    scale_list = []
-    df_list = []
-
-    state_list = states
-
-    for state in state_list:
-        mu_i, scale_i, df_i = AIS.extract_policy_mu_sigma_nig(
-            state=state,                    # State: list[ProfilePart], length = num_profiles
-            D=D, y=y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
-            M=M,
-            policies=policies,                 # global policies list (len P)
-            prof_idx_of_policy=prof_idx_of_policy,       # length-P array: global policy id -> profile k
-            R_per=R,                    # per-arm levels (len M)
-            lattice_edges=None,
-            mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
-            seed=None
-        )
-
-        mu_list.append(mu_i)
-        scale_list.append(scale_i)
-        df_list.append(df_i)
-
-    logw = np.asarray(logw, dtype=float)
-    mu = np.asarray(mu_list, dtype=float)
-    scale = np.asarray(scale_list, dtype=float)
-    df = np.asarray(df_list, dtype=float)
-
-    return logw, mu, scale, df
-
-def quantiles_for_all_policies(
-    states,
-    logw,
+def ais_quantiles_for_all_policies_root(
+    ais_sample,
     D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
     M,
     policies,                 # global policies list (len P)
@@ -2064,9 +2008,8 @@ def quantiles_for_all_policies(
       - quantiles : shape (n_policies,)
       - logw, mu, sd
     """
-    logw, mu, scale, df = extract_policy_posteriors_from_MCMC_RPS_sample(
-        states,
-        logw,
+    logw, mu, scale, df = extract_policy_posteriors_from_ais_sample(
+        ais_sample,
         D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
         M,
         policies,                 # global policies list (len P)
@@ -2076,6 +2019,7 @@ def quantiles_for_all_policies(
         mu0=mu0, kappa0=kappa0, alpha0=alpha0, beta0=beta0,
         seed=None
     )
+
     output = dict()
 
     for quantile in p:
@@ -2083,13 +2027,13 @@ def quantiles_for_all_policies(
         q = np.empty(n_policies, dtype=float)
 
         for k in range(n_policies):
-            q[k] = AIS.ais_policy_quantile(
-                logw=logw,
-                mu_k=mu[:, k],
-                scale_k=scale[:, k],
-                df_k=df[:, k],
-                alpha=quantile,
-            )
+            w=[np.exp(i) for i in logw],
+            mu_k=mu[:, k],
+            scale_k=scale[:, k],
+            df_k=df[:, k]
+            q[k] = quantiles.q_mixture_t_root(
+                k=len(df), w=w, mu=mu_k, s=scale_k, df=df_k, prob=quantile
+            )[0]
 
         output[f"{quantile}"] = q
     

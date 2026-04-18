@@ -984,3 +984,58 @@ def quantiles_for_all_policies(
         output[f"{quantile}"] = q
     
     return output
+
+from rashomon import quantiles
+
+def quantiles_for_all_policies_root(
+    states,
+    logw,
+    D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
+    M,
+    policies,                 # global policies list (len P)
+    prof_idx_of_policy,       # length-P array: global policy id -> profile k
+    R,                    # per-arm levels (len M)
+    lattice_edges=None,
+    mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
+    p=[0.025, 0.5, 0.975],
+    seed=None):
+    """
+    Compute AIS posterior alpha-quantile for every policy.
+
+    Returns
+    -------
+    dict with:
+      - alpha
+      - quantiles : shape (n_policies,)
+      - logw, mu, sd
+    """
+    logw, mu, scale, df = extract_policy_posteriors_from_MCMC_RPS_sample(
+        states,
+        logw,
+        D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
+        M,
+        policies,                 # global policies list (len P)
+        prof_idx_of_policy,       # length-P array: global policy id -> profile k
+        R,                    # per-arm levels (len M)
+        lattice_edges=None,
+        mu0=mu0, kappa0=kappa0, alpha0=alpha0, beta0=beta0,
+        seed=None
+    )
+    output = dict()
+
+    for quantile in p:
+        n_policies = mu.shape[1]
+        q = np.empty(n_policies, dtype=float)
+
+        for k in range(n_policies):
+            w=[np.exp(i) for i in logw],
+            mu_k=mu[:, k],
+            scale_k=scale[:, k],
+            df_k=df[:, k]
+            q[k] = quantiles.q_mixture_t_root(
+                k=len(df), w=w, mu=mu_k, s=scale_k, df=df_k, prob=quantile
+            )[0]
+
+        output[f"{quantile}"] = q
+    
+    return output

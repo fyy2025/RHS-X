@@ -216,7 +216,7 @@ def main():
 
         log_weight = np.log(np.repeat(1/len(mcmc_res["samples"]), len(mcmc_res["samples"])))
 
-        mcmc_summ = MCMC.quantiles_for_all_policies(
+        mcmc_summ = MCMC.quantiles_for_all_policies_root(
             mcmc_res["samples"],
             log_weight,
             D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
@@ -238,54 +238,54 @@ def main():
         result["MCMC"] = np.mean(MCMC_post_mean, axis=0)
 
         ### Exact:
-        # start = time.time()
+        start = time.time()
 
-        # all_partitions, losses = AIS.enumerate_all_states_and_losses(
-        #     profiles=profiles,
-        #     R=R,
-        #     M=M,
-        #     policies=all_policies,
-        #     policy_means=policy_means,
-        #     prof_idx_of_policy=prof_idx_of_policy,
-        #     D=D, y=y,
-        #     reg=lamb, normalize=0,
-        #     lattice_edges=None,
-        #     max_states=None  # or an integer cap to safeguard
-        # )
+        all_partitions, losses = AIS.enumerate_all_states_and_losses(
+            profiles=profiles,
+            R=R,
+            M=M,
+            policies=all_policies,
+            policy_means=policy_means,
+            prof_idx_of_policy=prof_idx_of_policy,
+            D=D, y=y,
+            reg=lamb, normalize=0,
+            lattice_edges=None,
+            max_states=None  # or an integer cap to safeguard
+        )
 
-        # true_log_post = [-i[1] for i in losses]
+        true_log_post = [-i[1] for i in losses]
 
-        # exact_post_mean = AIS.estimate_policy_means_from_RPS(
-        #     all_partitions,                     # dict with key "samples": List[State]
-        #     true_log_post,
-        #     all_policies,                     # global policy list (length P)
-        #     policy_means,                 # np.ndarray [P,2] = [sum_y, count]
-        #     prof_idx_of_policy,           # length-P array: policy_id -> profile k, for 36 policies, which profile is each policy in
-        #     R,                        # np.ndarray of arm levels (includes control)
-        #     M,
-        #     lattice_edges=None            # optional lattice; pass None if unused
-        # )
+        exact_post_mean = AIS.estimate_policy_means_from_RPS(
+            all_partitions,                     # dict with key "samples": List[State]
+            true_log_post,
+            all_policies,                     # global policy list (length P)
+            policy_means,                 # np.ndarray [P,2] = [sum_y, count]
+            prof_idx_of_policy,           # length-P array: policy_id -> profile k, for 36 policies, which profile is each policy in
+            R,                        # np.ndarray of arm levels (includes control)
+            M,
+            lattice_edges=None            # optional lattice; pass None if unused
+        )
 
-        # exact_summ = MCMC.quantiles_for_all_policies(
-        #     all_partitions,
-        #     true_log_post,
-        #     D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
-        #     M,
-        #     all_policies,                 # global policies list (len P)
-        #     prof_idx_of_policy,       # length-P array: global policy id -> profile k
-        #     R,                    # per-arm levels (len M)
-        #     lattice_edges=None,
-        #     mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
-        #     p=[0.025,0.5,0.975],
-        #     seed=None
-        # )
+        exact_summ = MCMC.quantiles_for_all_policies_root(
+            all_partitions,
+            true_log_post,
+            D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
+            M,
+            all_policies,                 # global policies list (len P)
+            prof_idx_of_policy,       # length-P array: global policy id -> profile k
+            R,                    # per-arm levels (len M)
+            lattice_edges=None,
+            mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
+            p=[0.025,0.5,0.975],
+            seed=None
+        )
 
-        # result["exact_quantiles"] = exact_summ
+        result["exact_quantiles"] = exact_summ
 
-        # end = time.time()
+        end = time.time()
 
-        # result["exact_time"] = end-start
-        # result["exact"] = exact_post_mean
+        result["exact_time"] = end-start
+        result["exact"] = exact_post_mean
 
         ### AIS / RPS
 
@@ -312,7 +312,7 @@ def main():
                 lattice_edges=None            # optional lattice; pass None if unused
             )
 
-            RPS_summ = MCMC.quantiles_for_all_policies(
+            RPS_summ = MCMC.quantiles_for_all_policies_root(
                 RPS_states,
                 log_alpha,
                 D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
@@ -356,7 +356,7 @@ def main():
                 cfg = cfg,
             )
 
-            summ = AIS.ais_quantiles_for_all_policies(
+            summ = AIS.ais_quantiles_for_all_policies_root(
                 ais_out,
                 D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
                 M,
