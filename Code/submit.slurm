@@ -22,6 +22,9 @@ echo "Executing Array Task ID: $SLURM_ARRAY_TASK_ID"
 # Move to project root
 cd $HOME/RHS-X/Code
 
+# Create directories if they don't exist
+mkdir -p output2 output_files2
+
 # Activate venv
 source venv/bin/activate
 
