@@ -43,10 +43,8 @@ ZIP_NAME="trial_results_${SLURM_JOB_ID}.zip"
 zip -rj "$ZIP_NAME" trial_output/
 
 # Send the email with the attachment
-echo "Trial job $SLURM_JOB_ID finished. Results attached." | \
-mail -s "Slurm Trial Results: $SLURM_JOB_ID" \
--a "$ZIP_NAME" \
-span18@uw.edu
+echo "Trial job $SLURM_JOB_ID finished. Results are attached in $ZIP_NAME." | \
+mail -s "Klone Trial Results: $SLURM_JOB_ID" -a "$ZIP_NAME" span18@uw.edu
 
 # Clean up zip file
 rm "$ZIP_NAME"
