@@ -1,4 +1,13 @@
 #!/bin/bash
+#SBATCH --job-name=email_job
+#SBATCH --account=escience
+#SBATCH --partition=cpu-g2
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --mem=16G
+#SBATCH --time=00:5:00
+#SBATCH --output=log/%x_%j.out
+#SBATCH --error=log/%x_%j.err
 
 # Move to your code directory
 cd "$HOME/RHS-X/Code"
