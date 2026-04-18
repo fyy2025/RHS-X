@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --job-name=simulation_scenario1
+#SBATCH --job-name=simulation_scenario2
 #SBATCH --account=escience
 #SBATCH --partition=cpu-g2
 #SBATCH --nodes=1
@@ -29,6 +29,6 @@ echo "Using python: $(which python)"
 python --version
 
 # Run script and pass the array ID to the --epoch argument
-python simulation_scenario1.py --epoch $SLURM_ARRAY_TASK_ID
+python simulation_scenario2.py --epoch $SLURM_ARRAY_TASK_ID
 
 echo "Finished at $(date)"
