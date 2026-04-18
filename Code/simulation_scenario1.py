@@ -193,7 +193,7 @@ def main():
 
         log_weight = np.log(np.repeat(1/len(mcmc_res["samples"]), len(mcmc_res["samples"])))
 
-        mcmc_summ = MCMC.quantiles_for_all_policies(
+        mcmc_summ = MCMC.quantiles_for_all_policies_root(
             mcmc_res["samples"],
             log_weight,
             D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
@@ -243,7 +243,7 @@ def main():
             lattice_edges=None            # optional lattice; pass None if unused
         )
 
-        exact_summ = MCMC.quantiles_for_all_policies(
+        exact_summ = MCMC.quantiles_for_all_policies_root(
             all_partitions,
             true_log_post,
             D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
@@ -289,7 +289,7 @@ def main():
                 lattice_edges=None            # optional lattice; pass None if unused
             )
 
-            RPS_summ = MCMC.quantiles_for_all_policies(
+            RPS_summ = MCMC.quantiles_for_all_policies_root(
                 RPS_states,
                 log_alpha,
                 D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
@@ -333,7 +333,7 @@ def main():
                 cfg = cfg,
             )
 
-            summ = AIS.ais_quantiles_for_all_policies(
+            summ = AIS.ais_quantiles_for_all_policies_root(
                 ais_out,
                 D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
                 M,
