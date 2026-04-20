@@ -13,9 +13,13 @@ def main():
     # Set up argument parser
     parser = argparse.ArgumentParser(description="Run AIS MCMC simulation")
     parser.add_argument('--epoch', type=int, required=True, help="Epoch number to run")
+    parser.add_argument('--eps1', type=float, required=True, help="Probability of sampling within RPS")
+    parser.add_argument('--eps2', type=float, required=True, help="Probability of sampling within RPS and its 1-edit neighbourhood")
     args = parser.parse_args()
 
     epoch = args.epoch
+    eps1 = args.eps1
+    eps2 = args.eps2
     print(f"Starting execution for epoch: {epoch}")
 
     N_ITER = 50000
@@ -323,8 +327,8 @@ def main():
                 y,
                 theta,
                 reg=lamb,
-                eps1=0.5,
-                eps2=0.75,
+                eps1=eps1,
+                eps2=eps2,
                 all_policies=all_policies,
                 policy_means=policy_means,
                 score_s=score_s,
