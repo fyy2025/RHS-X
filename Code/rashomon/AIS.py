@@ -1134,6 +1134,57 @@ def run_ais_streaming_from_data_parallel(
     m=float(np.max(logw)); w=np.exp(logw-m)
     return AISOutput(terminals, logw, w/w.sum(), ladder)
 
+def run_ais_streaming_from_data_parallel_fixed_ladder(
+    epoch,
+    M, R, H, x, D, y, 
+    theta, reg, eps1, eps2,
+    score_s,
+    all_policies,
+    policy_means,
+    out_dir,
+    num_workers,
+    cfg,
+    ladder,
+    tau_init: float = 1.0,
+    keep_in_memory: bool = True
+):
+    
+    ## redo the RPS steps
+    R_set, R_profiles = RAggregate(M, R, H, D, y, theta, reg, verbose=True)
+    anchors = build_anchor_states(R_set, R_profiles, M, R)
+    prof_idx_of_policy, profiles = build_profile_index_of_policy(all_policies, hasse.policy_to_profile)
+    RPS_states = raggregate_to_states((R_set, R_profiles), profiles)
+    log_alpha = [np.log(max(1e-300, score_s_expneg_raw(A, D, y, M, R, prof_idx_of_policy, all_policies, policy_means, reg))) for A in anchors]
+    buckets = make_p0_buckets_weighted_S0(RPS_states, np.asarray(R,int), log_alpha, eps1=eps1, eps2=eps2, min_len=cfg.min_len)
+    log_p0 = partial(log_p0_distance_weighted_S0_wrapper, buckets=buckets)
+    
+    out_jsonl = os.path.join(out_dir, f"AIS_samples_{theta}_{epoch}.jsonl")
+    if out_jsonl and os.path.exists(out_jsonl):
+        os.remove(out_jsonl)
+
+    path_ids = list(range(cfg.n_paths))
+    chunks = np.array_split(path_ids, num_workers)
+
+    args = [
+        (chunk.tolist(), out_jsonl, cfg, buckets, RPS_states, R, ladder,
+        log_p0, x, D, y, M, prof_idx_of_policy, all_policies, policy_means, reg)
+        for chunk in chunks
+    ]
+
+    with Pool(num_workers) as p:
+        chunk_results = p.starmap(parallel_ais_chunk, args)
+
+    terminals = []
+    logw = []
+    for t_chunk, w_chunk in chunk_results:
+        terminals.extend(t_chunk)
+        logw.extend(w_chunk)
+
+    logw = np.array(logw)
+
+    m=float(np.max(logw)); w=np.exp(logw-m)
+    return AISOutput(terminals, logw, w/w.sum(), ladder)
+
 
 def load_ais_from_jsonl(jsonl_path: str):
     """
