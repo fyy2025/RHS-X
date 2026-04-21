@@ -42,4 +42,8 @@ python simulation_scenario2.py \
     --eps1 $EPS1 \
     --eps2 $EPS2
 
-echo "Finished at $(date)"
+# 3. Create ONE master zip
+# This grabs the folder and all its contents
+zip -r "results_${SLURM_JOB_ID}.zip" output2/ output_files2/
+
+echo "Job $SLURM_JOB_ID finished and zipped."
