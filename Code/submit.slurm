@@ -15,9 +15,14 @@
 
 set -euo pipefail
 
+# --- Define Simulation Parameters ---
+EPS1=0.4
+EPS2=0.7
+
 echo "Running on $(hostname)"
 echo "Started at $(date)"
 echo "Executing Array Task ID: $SLURM_ARRAY_TASK_ID"
+echo "Parameters: EPS1=${EPS1}, EPS2=${EPS2}"
 
 # Move to project root
 cd $HOME/RHS-X/Code
@@ -31,7 +36,10 @@ source venv/bin/activate
 echo "Using python: $(which python)"
 python --version
 
-# Run script and pass the array ID to the --epoch argument
-python simulation_scenario2.py --epoch $SLURM_ARRAY_TASK_ID
+# Run script
+python simulation_scenario2.py \
+    --epoch $SLURM_ARRAY_TASK_ID \
+    --eps1 $EPS1 \
+    --eps2 $EPS2
 
 echo "Finished at $(date)"
