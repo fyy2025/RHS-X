@@ -2077,14 +2077,32 @@ def ais_quantiles_for_all_policies_root(
         n_policies = mu.shape[1]
         q = np.empty(n_policies, dtype=float)
 
+        # for k in range(n_policies):
+        #     w=[np.exp(i) for i in logw],
+        #     mu_k=mu[:, k],
+        #     scale_k=scale[:, k],
+        #     df_k=df[:, k]
+        #     q[k] = quantiles.q_mixture_t_root(
+        #         k=len(df), w=w, mu=mu_k, s=scale_k, df=df_k, prob=quantile
+        #     )[0]
+
         for k in range(n_policies):
-            w=[np.exp(i) for i in logw],
-            mu_k=mu[:, k],
-            scale_k=scale[:, k],
+            w=[np.exp(i) for i in logw]
+            mu_k=mu[:, k]
+            scale_k=scale[:, k]
             df_k=df[:, k]
-            q[k] = quantiles.q_mixture_t_root(
-                k=len(df), w=w, mu=mu_k, s=scale_k, df=df_k, prob=quantile
-            )[0]
+            q_sum = 0
+            for i in range(len(w)):
+                w_i = w[i]
+                mu_i = mu_k[i]
+                scale_i = scale_k[i]
+                df_i = df_k[i]
+                
+                q_i = quantiles.q_mixture_t_root(
+                    k=1, w=[1], mu=[mu_i], s=[scale_i], df=[df_i], prob=quantile
+                    )[0]
+                q_sum = q_sum + w_i*q_i
+            q[k] = q_sum/np.sum(w)
 
         output[f"{quantile}"] = q
     
