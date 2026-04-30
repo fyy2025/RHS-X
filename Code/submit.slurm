@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --job-name=simulation_scenario2
+#SBATCH --job-name=sim2
 #SBATCH --account=escience
 #SBATCH --partition=cpu-g2
 #SBATCH --nodes=1
