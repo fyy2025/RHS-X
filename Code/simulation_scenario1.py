@@ -27,6 +27,8 @@ def main():
     N_THIN = 10
     n_paths = 300
     n_levels = 20
+    ladder = [pow(10, i/10) for i in range(-9,1,1)]
+
     # N_ITER = 110
     # N_BURN = 10
     # N_THIN = 1
@@ -317,7 +319,7 @@ def main():
 
             start = time.time()
             cfg = AIS.AISConfig(n_paths=n_paths, n_levels=n_levels, moves_per_level=moves_per_level, min_len=1, seed=2)
-            ais_out = AIS.run_ais_streaming_from_data_parallel(
+            ais_out = AIS.run_ais_streaming_from_data_parallel_fixed_ladder(
                 epoch,
                 M,
                 R,
@@ -332,9 +334,10 @@ def main():
                 all_policies=all_policies,
                 policy_means=policy_means,
                 score_s=score_s,
-                out_dir="./output_files",
+                out_dir="./output_files2",
                 num_workers=1,
                 cfg = cfg,
+                ladder = ladder
             )
 
             summ = AIS.ais_quantiles_for_all_policies_root(

@@ -27,7 +27,7 @@ def main():
     N_THIN = 10
     n_paths = 300
     n_levels = 20
-    ladder = [0, 0.05, 0.15, 0.35, 0.55, 0.75, 0.875, 1]
+    ladder = [pow(10, i/10) for i in range(-9,1,1)]
     # N_ITER = 110
     # N_BURN = 10
     # N_THIN = 1
