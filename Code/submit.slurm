@@ -28,7 +28,7 @@ echo "Parameters: EPS1=${EPS1}, EPS2=${EPS2}"
 cd $HOME/RHS-X/Code
 
 # Create directories if they don't exist
-mkdir -p output1 output_files1
+mkdir -p output output_files
 
 # Activate venv
 source venv/bin/activate
@@ -44,6 +44,6 @@ python simulation_scenario1.py \
 
 # 3. Create ONE master zip
 # This grabs the folder and all its contents
-zip -r "results_${SLURM_JOB_ID}.zip" output1/ output_files1/
+zip -r "results_${SLURM_JOB_ID}.zip" output/ output_files/
 
 echo "Job $SLURM_JOB_ID finished and zipped."
