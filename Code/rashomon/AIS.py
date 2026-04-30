@@ -2254,12 +2254,12 @@ def ais_quantiles_for_all_policies_root(
         q = np.empty(n_policies, dtype=float)
 
         for k in range(n_policies):
-            w=[np.exp(i) for i in logw],
-            mu_k=mu[:, k],
-            scale_k=scale[:, k],
-            df_k=df[:, k]
+            w = np.exp(logw)
+            mu_k = mu[:, k]
+            scale_k = scale[:, k]
+            df_k = df[:, k]
             q[k] = quantiles.q_mixture_t_root(
-                k=len(df), w=w, mu=mu_k, s=scale_k, df=df_k, prob=quantile
+                k=len(df_k), w=w, mu=mu_k, s=scale_k, df=df_k, prob=quantile
             )[0]
 
         output[f"{quantile}"] = q

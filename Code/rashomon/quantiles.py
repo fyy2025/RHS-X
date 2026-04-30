@@ -17,11 +17,10 @@ def q_mixture_t_root(k, w, mu, s, df, prob, xtol=1e-8, maxiter=100):
     maxiter : (int, optional) Maximum iterations for the root finder. Default is 100.
     """
     # 1. Sanitize and broadcast inputs
-    w = np.asarray(w, dtype=np.float64)
-    w = w / np.sum(w) # Ensure weights sum to 1
-    w = np.expand_dims(w, axis=1)    
-    mu = np.asarray(mu, dtype=np.float64)
-    s = np.asarray(s, dtype=np.float64)
+    w = np.asarray(w, dtype=np.float64).ravel()
+    w = w / np.sum(w)
+    mu = np.asarray(mu, dtype=np.float64).ravel()
+    s = np.asarray(s, dtype=np.float64).ravel()
     prob = np.atleast_1d(prob)
 
     # Recycle df if a single value is provided
@@ -50,6 +49,12 @@ def q_mixture_t_root(k, w, mu, s, df, prob, xtol=1e-8, maxiter=100):
         if np.isclose(lower_bound, upper_bound):
             quantiles[i] = lower_bound
             continue
+
+        # Nudge outward to absorb floating-point error in stdtr/stdtrit inverses.
+        # f is monotone (mixture CDF), so this preserves the sign bracket.
+        eps = max(abs(upper_bound - lower_bound), 1.0) * 1e-8
+        lower_bound -= eps
+        upper_bound += eps
 
         # Find the root using Brent's method
         quantiles[i] = brentq(
