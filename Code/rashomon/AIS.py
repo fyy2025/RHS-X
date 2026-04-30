@@ -1855,6 +1855,114 @@ def extract_policy_mu_sigma_nig(
 
     return mu, t_scale, df
 
+
+def extract_policy_mu_sigma_flat(
+    state,
+    D, y,
+    M,
+    policies,
+    prof_idx_of_policy,
+    R_per,
+    lattice_edges=None,
+):
+    """
+    Flat-prior version of extract_policy_mu_sigma_nig.
+
+    Implements eq. (A6): for each profile with H pools and n total observations,
+
+        gamma_h | Pi, Z  ~  t_{n-H}( gamma_hat_h,  MSE_Pi / n_h )
+
+    where
+        gamma_hat_h = sy_h / n_h          (pool sample mean)
+        SSE_Pi      = sum_h (sy2_h - n_h * gamma_hat_h^2)
+        MSE_Pi      = SSE_Pi / (n - H)    (shared across all pools in profile)
+
+    Returns
+    -------
+    mu      : np.ndarray (P,)  -- posterior location per policy
+    t_scale : np.ndarray (P,)  -- posterior scale  per policy = sqrt(MSE / n_h)
+    df      : np.ndarray (P,)  -- degrees of freedom per policy = n_total - H
+    """
+    P = len(policies)
+    y1 = y[:, 0] if (isinstance(y, np.ndarray) and y.ndim == 2) else np.asarray(y).ravel()
+    pid_all = D[:, 0].astype(int)
+
+    K = int(np.max(prof_idx_of_policy)) + 1
+
+    prof_to_global = [[] for _ in range(K)]
+    for pid in range(P):
+        prof_to_global[int(prof_idx_of_policy[pid])].append(pid)
+
+    prof_policies = [[policies[i] for i in idxs] for idxs in prof_to_global]
+    prof_pid_to_local = []
+    for k in range(K):
+        idxs = prof_to_global[k]
+        prof_pid_to_local.append({pid: j for j, pid in enumerate(idxs)})
+
+    prof_data_idx = []
+    for k in range(K):
+        idxs = np.array(prof_to_global[k], dtype=int)
+        if idxs.size == 0:
+            prof_data_idx.append(np.array([], dtype=int))
+            continue
+        mask = np.isin(pid_all, idxs)
+        prof_data_idx.append(np.flatnonzero(mask))
+
+    mu = np.zeros(P, float)
+    t_scale = np.zeros(P, float)
+    df = np.zeros(P, float)
+
+    for k in range(K):
+        idxs = prof_to_global[k]
+        if not idxs:
+            continue
+
+        sigma_full_k = assemble_sigma_full_for_profile(state[k], M, np.asarray(R_per, int))
+        pi_pools_k, pi_policies_k = extract_pools.extract_pools(prof_policies[k], sigma_full_k, lattice_edges)
+        n_pools = len(pi_pools_k)
+
+        n_h = np.zeros(n_pools, int)
+        sy = np.zeros(n_pools, float)
+        sy2 = np.zeros(n_pools, float)
+
+        didx = prof_data_idx[k]
+        pid_k = pid_all[didx]
+        y_k = y1[didx]
+        pid2loc = prof_pid_to_local[k]
+
+        for pid_obs, y_obs in zip(pid_k, y_k):
+            loc = pid2loc[int(pid_obs)]
+            pool = pi_policies_k[loc]
+            n_h[pool] += 1
+            sy[pool] += float(y_obs)
+            sy2[pool] += float(y_obs) ** 2
+
+        # Profile-level sufficient stats for (A6)
+        gamma_hat = np.where(n_h > 0, sy / np.maximum(n_h, 1), 0.0)
+        sse_per_pool = sy2 - n_h * gamma_hat ** 2        # sum (y_i - ybar_h)^2 per pool
+        SSE = float(np.sum(sse_per_pool))
+        n_total = int(np.sum(n_h))
+        H = n_pools
+        df_k = float(n_total - H)                         # eq. (A6): nu = n - H
+
+        if df_k <= 0:
+            # Degenerate: fewer obs than pools; leave zeros (uninformative)
+            continue
+
+        MSE = SSE / df_k
+
+        pool_mu = gamma_hat                               # location  = pool sample mean
+        pool_scale = np.sqrt(MSE / np.maximum(n_h, 1))   # scale     = sqrt(MSE / n_h)
+
+        for local_idx, pid in enumerate(idxs):
+            pool_id = pi_policies_k[local_idx]
+            mu[pid] = pool_mu[pool_id]
+            t_scale[pid] = pool_scale[pool_id]
+            df[pid] = df_k
+
+    return mu, t_scale, df
+
+
 def extract_policy_posteriors_from_ais_sample(
     ais_sample,
     D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
@@ -1885,16 +1993,14 @@ def extract_policy_posteriors_from_ais_sample(
     lw_list = ais_sample.logw
 
     for state, lw in zip(state_list, lw_list):
-        mu_i, scale_i, df_i = extract_policy_mu_sigma_nig(
-            state=state,                    # State: list[ProfilePart], length = num_profiles
-            D=D, y=y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
+        mu_i, scale_i, df_i = extract_policy_mu_sigma_flat(
+            state=state,
+            D=D, y=y,
             M=M,
-            policies=policies,                 # global policies list (len P)
-            prof_idx_of_policy=prof_idx_of_policy,       # length-P array: global policy id -> profile k
-            R_per=R,                    # per-arm levels (len M)
+            policies=policies,
+            prof_idx_of_policy=prof_idx_of_policy,
+            R_per=R,
             lattice_edges=None,
-            mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
-            seed=None
         )
 
         logw.append(lw)
@@ -2038,7 +2144,7 @@ def ais_quantiles_for_all_policies(
     
     return output
 
-def ais_quantiles_for_all_policies_root(
+def ais_quantiles_for_all_policies_root_original(
     ais_sample,
     D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
     M,
@@ -2108,7 +2214,7 @@ def ais_quantiles_for_all_policies_root(
     
     return output
 
-def ais_quantiles_for_all_policies_root_original(
+def ais_quantiles_for_all_policies_root(
     ais_sample,
     D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
     M,

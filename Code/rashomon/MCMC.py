@@ -908,16 +908,14 @@ def extract_policy_posteriors_from_MCMC_RPS_sample(
     state_list = states
 
     for state in state_list:
-        mu_i, scale_i, df_i = AIS.extract_policy_mu_sigma_nig(
-            state=state,                    # State: list[ProfilePart], length = num_profiles
-            D=D, y=y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
+        mu_i, scale_i, df_i = AIS.extract_policy_mu_sigma_flat(
+            state=state,
+            D=D, y=y,
             M=M,
-            policies=policies,                 # global policies list (len P)
-            prof_idx_of_policy=prof_idx_of_policy,       # length-P array: global policy id -> profile k
-            R_per=R,                    # per-arm levels (len M)
+            policies=policies,
+            prof_idx_of_policy=prof_idx_of_policy,
+            R_per=R,
             lattice_edges=None,
-            mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
-            seed=None
         )
 
         mu_list.append(mu_i)
