@@ -996,9 +996,13 @@ def run_ais_state_streaming_from_custom_states(
  
     terminals = []; logw = np.zeros(cfg.n_paths, float)
 
+    os.makedirs(out_dir, exist_ok=True)
     out_jsonl = os.path.join(out_dir, f"AIS_samples_{label}.jsonl")
     if out_jsonl and os.path.exists(out_jsonl):
-        os.remove(out_jsonl)
+        try:
+            os.remove(out_jsonl)
+        except FileNotFoundError:
+            pass
 
     with open(out_jsonl, "a", encoding="utf-8") as f:
         for p in range(cfg.n_paths):

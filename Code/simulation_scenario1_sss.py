@@ -219,7 +219,7 @@ def main():
                 R=R, eps1=eps1, eps2=eps2,
                 score_s=score_s, cfg=cfg,
                 out_dir="./output_sss",
-                label=f"RPS_{theta}",
+                label=f"epoch{epoch}_iter{iter}_RPS_{theta}",
             )
             result[f"AIS_RPS_{theta}"] = AIS.estimate_policy_means_from_ais(
                 ais_out=ais_rps_out, all_policies=all_policies,
@@ -246,7 +246,7 @@ def main():
                 R=R, eps1=eps1, eps2=eps2,
                 score_s=score_s, cfg=cfg,
                 out_dir="./output_sss",
-                label=f"SSS_{theta}",
+                label=f"epoch{epoch}_iter{iter}_SSS_{theta}",
             )
             result[f"AIS_SSS_{theta}"] = AIS.estimate_policy_means_from_ais(
                 ais_out=ais_sss_out, all_policies=all_policies,
@@ -259,7 +259,7 @@ def main():
                 p=[0.025, 0.5, 0.975], seed=None,
             )
             result[f"AIS_SSS_{theta}_coverage"] = MCMC.posterior_mass_coverage(
-                [math.log(max(1e-300, score_s(s))) for s in ais_sss_out["terminals"]],
+                [math.log(max(1e-300, score_s(s))) for s in ais_sss_out.terminals],
                 true_log_post,
             )
             result[f"AIS_SSS_{theta}_time"] = time.time() - start
