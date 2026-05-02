@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --job-name=sim1
+#SBATCH --job-name=sim_sss
 #SBATCH --account=escience
 #SBATCH --partition=cpu-g2
 #SBATCH --nodes=1
@@ -44,6 +44,6 @@ python simulation_scenario1_sss.py \
 
 # 3. Create ONE master zip
 # This grabs the folder and all its contents
-zip -r "results_${SLURM_JOB_ID}.zip" output_sss/ 
+zip -r "results_${SLURM_JOB_ID}.zip" output_sss/
 
 echo "Job $SLURM_JOB_ID finished and zipped."
