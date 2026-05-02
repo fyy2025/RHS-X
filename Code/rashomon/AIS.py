@@ -970,6 +970,61 @@ def run_ais_state_streaming_from_data(
     m=float(np.max(logw)); w=np.exp(logw-m)
     return AISOutput(terminals, logw, w/w.sum(), ladder)
 
+
+def run_ais_state_streaming_from_custom_states(
+    ladder,
+    init_states,        # List[State]: warm-start states (e.g. SSS-visited states)
+    init_log_alpha,     # List[float]: log-scores for each init_state
+    R,
+    eps1,
+    eps2,
+    score_s,
+    cfg,
+    out_dir,
+    label: str = "custom",  # used in output filename
+) -> Dict[str, List[Any]]:
+    """
+    AIS seeded from an arbitrary set of states with associated log-scores.
+    Identical annealing logic as run_ais_state_streaming_from_data but
+    bypasses RAggregate — use for SSS-seeded AIS or any custom warm start.
+    """
+    buckets = make_p0_buckets_weighted_S0(
+        init_states, np.asarray(R, int), init_log_alpha,
+        eps1=eps1, eps2=eps2, min_len=cfg.min_len,
+    )
+    log_p0 = partial(log_p0_distance_weighted_S0_wrapper, buckets=buckets)
+ 
+    terminals = []; logw = np.zeros(cfg.n_paths, float)
+
+    out_jsonl = os.path.join(out_dir, f"AIS_samples_{label}.jsonl")
+    if out_jsonl and os.path.exists(out_jsonl):
+        os.remove(out_jsonl)
+
+    with open(out_jsonl, "a", encoding="utf-8") as f:
+        for p in range(cfg.n_paths):
+            x  = sample_p0(buckets, init_states, R)
+            lw = 0.0
+            beta_prev = ladder[0]
+            for beta_cur in ladder[1:]:
+                lq  = log_p0(x)
+                lp  = math.log(max(1e-300, score_s(x)))
+                lw += (beta_cur - beta_prev) * (lp - lq)
+                for _ in range(cfg.moves_per_level):
+                    x = mh_step_state_uniform_neighbors(
+                        x, beta_cur, log_p0, score_s, min_len=cfg.min_len)
+                beta_prev = beta_cur
+
+            rec = {"iter": p, "state": MCMC._state_to_jsonable(x),
+                   "unnormalized_log_weight": lw}
+            f.write(json.dumps(rec) + "\n")
+            f.flush()
+            terminals.append(_copy_state(x))
+            logw[p] = lw
+
+    m = float(np.max(logw)); w = np.exp(logw - m)
+    return AISOutput(terminals, logw, w / w.sum(), ladder)
+
+
 ### Parallel processing!!
 
 from multiprocessing import Pool, current_process

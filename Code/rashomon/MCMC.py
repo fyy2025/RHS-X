@@ -1035,5 +1035,91 @@ def quantiles_for_all_policies_root(
             )[0]
 
         output[f"{quantile}"] = q
-    
+
+    return output
+
+
+# ---------------------------------------------------------------------------
+# Shotgun Stochastic Search (SSS)
+# ---------------------------------------------------------------------------
+
+def run_sss(
+    profiles,
+    M: int,
+    R,
+    score_s,
+    n_steps: int = 200,
+    min_len: int = 1,
+    seed: Optional[int] = None,
+    start_state=None,
+) -> List[Tuple]:
+    """
+    Shotgun Stochastic Search over partition structures.
+
+    At each step:
+      1. Enumerate all neighbors of the current state.
+      2. Score any not yet visited (caching previously scored states).
+      3. Sample the next state proportional to unnormalized posterior scores.
+      4. All uniquely scored states accumulate in the visited set.
+
+    Returns
+    -------
+    List of (state, log_score) for every uniquely visited state.
+    """
+    if seed is not None:
+        np.random.seed(seed)
+        random.seed(seed)
+
+    if start_state is None:
+        current = AIS.random_partition_state_uniform_bits(M=M, R=R, profiles=profiles)
+    else:
+        current = start_state
+
+    # visited: signature -> (state, log_score)
+    cache: Dict = {}
+
+    def _score_cached(s):
+        sig = AIS.state_signature(s)
+        if sig not in cache:
+            cache[sig] = (s, math.log(max(1e-300, score_s(s))))
+        return cache[sig][1]
+
+    _score_cached(current)   # score initial state
+
+    for _ in range(n_steps):
+        neighbors = AIS.state_neighbors_ubs(current, min_len=min_len)
+        candidates = [current] + neighbors
+
+        log_scores = np.array([_score_cached(s) for s in candidates])
+
+        # numerically stable softmax sampling
+        log_scores_shifted = log_scores - log_scores.max()
+        probs = np.exp(log_scores_shifted)
+        probs /= probs.sum()
+
+        current = candidates[int(np.random.choice(len(candidates), p=probs))]
+
+    return list(cache.values())   # [(state, log_score), ...]
+
+
+def posterior_mass_coverage(visited_log_scores, all_log_scores):
+    """
+    Fraction of the total posterior mass captured by a set of visited states.
+
+    Parameters
+    ----------
+    visited_log_scores : unnormalised log-posterior values for visited states.
+    all_log_scores     : unnormalised log-posterior values for ALL states
+                         (from exact enumeration).
+
+    Returns
+    -------
+    float in [0, 1]
+    """
+    from scipy.special import logsumexp
+    v = np.asarray(visited_log_scores, dtype=float)
+    a = np.asarray(all_log_scores,     dtype=float)
+    if len(v) == 0:
+        return 0.0
+    return float(np.exp(logsumexp(v) - logsumexp(a)))
     return output
