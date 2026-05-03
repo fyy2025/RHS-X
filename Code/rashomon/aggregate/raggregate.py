@@ -5,7 +5,8 @@ from sklearn.metrics import mean_squared_error
 
 from multiprocessing import Pool
 
-from .profile import RAggregate_profile, _brute_RAggregate_profile
+from .profile import (RAggregate_profile, _brute_RAggregate_profile,
+                      RAggregate_profile_bayes, _brute_RAggregate_profile_bayes)
 from .utils import find_feasible_sum_subsets
 
 from .. import loss
@@ -188,10 +189,71 @@ def parallel_worker_RAggregat_profile(profile_k, eq_lb_k, M_k, R_k, H_profile,
     return rashomon_k
 
 
+def parallel_worker_RAggregat_profile_bayes(profile_k, M_k, R_k, H_profile,
+                                            D_k, y_k, theta_k, reg, policies_k,
+                                            policy_means_k, verbose, bruteforce) -> RashomonSet:
+    """Parallel worker for RAggregate using the Bayesian Lemma A2 loss."""
+    import math
+    from scipy.special import gammaln
+
+    if D_k is None:
+        rashomon_k = RashomonSet(shape=None)
+        rashomon_k.P_qe = [None]
+        rashomon_k.Q = np.array([0])
+        if verbose:
+            print(f"Skipping profile {profile_k}")
+        return rashomon_k
+
+    if verbose:
+        print(profile_k, theta_k)
+
+    if M_k == 0 or (len(R_k) == 1 and R_k[0] == 2):
+        rashomon_k = RashomonSet(shape=None)
+        rashomon_k.P_qe = [None]
+        n_k = D_k.shape[0]
+        y_mean = float(np.mean(y_k[:, 0]))
+        SSE_k = float(np.sum((y_k[:, 0] - y_mean) ** 2))
+        lamb_prime = reg - 0.5 * math.log(math.pi)
+        if SSE_k <= 0.0 or n_k <= 1:
+            control_loss = float('inf')
+        else:
+            c_Pi = 0.5 * math.log(float(n_k)) - gammaln((n_k - 1) / 2.0)
+            control_loss = (n_k - 1) / 2.0 * math.log(SSE_k) + lamb_prime + c_Pi
+        rashomon_k.Q = np.array([control_loss])
+    else:
+        if not bruteforce:
+            if verbose:
+                print("Adaptive (Bayes)")
+                start = time.time()
+            rashomon_k = RAggregate_profile_bayes(
+                M_k, R_k, H_profile, D_k, y_k, theta_k, profile_k, reg,
+                policies_k, policy_means_k)
+            if verbose:
+                elapsed = time.time() - start
+                print(f"Profile {profile_k} took {elapsed} s adaptively (Bayes)")
+            rashomon_k.calculate_loss_bayes(D_k, y_k, policies_k, policy_means_k, reg)
+        else:
+            if verbose:
+                print("Brute forcing (Bayes)")
+                start = time.time()
+            rashomon_k = _brute_RAggregate_profile_bayes(
+                M_k, R_k, H_profile, D_k, y_k, theta_k, profile_k, reg,
+                policies_k, policy_means_k)
+            if verbose:
+                elapsed = time.time() - start
+                print(f"Profile {profile_k} took {elapsed} s brute forcing (Bayes)")
+
+    rashomon_k.sort()
+    if verbose:
+        print(f"Profile {profile_k} has {len(rashomon_k)} objects in Rashomon set")
+
+    return rashomon_k
+
+
 def RAggregate(M: int, R: int | np.ndarray[int], H: int, D: np.ndarray, y: np.ndarray,
                theta: float, reg: float = 1, verbose: bool = False,
-               num_workers: int = 1,
-               bruteforce: bool = False) -> tuple[list[list[int]], list[RashomonSet]]:
+               num_workers: int = 1, bruteforce: bool = False,
+               use_bayes: bool = False) -> tuple[list[list[int]], list[RashomonSet]]:
     """
     RPS enumeration algorithm
 
@@ -239,7 +301,7 @@ def RAggregate(M: int, R: int | np.ndarray[int], H: int, D: np.ndarray, y: np.nd
             policies_profiles_idx[profile_p_id] = [i]
             policies_profiles[profile_p_id] = [p]
 
-    # Subset data by profiles and find equiv policy lower bound
+    # Subset data by profiles and find per-profile lower bounds
     D_profiles = {}
     y_profiles = {}
     policy_means_profiles = {}
@@ -256,9 +318,11 @@ def RAggregate(M: int, R: int | np.ndarray[int], H: int, D: np.ndarray, y: np.nd
         else:
             policy_means_k = loss.compute_policy_means(D_k, y_k, len(policies_profiles[k]))
             policy_means_profiles[k] = policy_means_k
-            eq_lb_profiles[k] = find_profile_lower_bound(D_k, y_k, policy_means_k)
+            if not use_bayes:
+                eq_lb_profiles[k] = find_profile_lower_bound(D_k, y_k, policy_means_k)
 
-    eq_lb_profiles /= num_data
+    if not use_bayes:
+        eq_lb_profiles /= num_data
     eq_lb_sum = np.sum(eq_lb_profiles)
 
     # Create arguments for parallelization
@@ -278,15 +342,20 @@ def RAggregate(M: int, R: int | np.ndarray[int], H: int, D: np.ndarray, y: np.nd
         R_k = R[profile_mask]
         M_k = np.sum(profile)
 
-        args_k = (profile, eq_lb_profiles[k], M_k, R_k, H_profile, D_k, y_k, theta_k, reg, policies_k,
-                  policy_means_k, verbose, bruteforce, num_data)
+        if use_bayes:
+            args_k = (profile, M_k, R_k, H_profile, D_k, y_k, theta_k, reg, policies_k,
+                      policy_means_k, verbose, bruteforce)
+        else:
+            args_k = (profile, eq_lb_profiles[k], M_k, R_k, H_profile, D_k, y_k, theta_k, reg, policies_k,
+                      policy_means_k, verbose, bruteforce, num_data)
 
         parallel_args.append(args_k)
 
     # Now solve each profile independently
     rashomon_profiles: list[RashomonSet] = [None]*num_profiles
+    worker_fn = parallel_worker_RAggregat_profile_bayes if use_bayes else parallel_worker_RAggregat_profile
     with Pool(num_workers) as p:
-        rashomon_profiles = p.starmap(parallel_worker_RAggregat_profile, parallel_args)
+        rashomon_profiles = p.starmap(worker_fn, parallel_args)
 
     feasible = True
     for rashomon_k in rashomon_profiles:

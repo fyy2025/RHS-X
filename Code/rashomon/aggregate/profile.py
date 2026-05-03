@@ -215,6 +215,147 @@ def _brute_RAggregate_profile(M: int, R: int | np.ndarray, H: int, D: np.ndarray
     return P_qe
 
 
+def RAggregate_profile_bayes(M: int, R: int | np.ndarray, H: int, D: np.ndarray,
+                             y: np.ndarray, theta: float, profile: tuple, reg: float = 1,
+                             policies: list | None = None,
+                             policy_means: np.ndarray | None = None) -> RashomonSet:
+    """
+    RPS enumeration using the Bayesian Lemma A2 loss.
+    B-based pruning is skipped (no valid lower bound for the Bayesian formula).
+    """
+
+    if isinstance(R, int):
+        R = np.array([R] * M)
+
+    if policies is None or policy_means is None:
+        all_policies = enumerate_policies(M, R)
+        policies = [x for x in all_policies if policy_to_profile(x) == profile]
+        policy_means = loss.compute_policy_means(D, y, len(policies))
+
+    if np.max(R) == 2:
+        sigma = np.zeros(shape=(M, 1)) + np.inf
+        P_qe = RashomonSet(sigma.shape)
+        P_qe.insert(sigma)
+        return P_qe
+
+    sigma = initialize_sigma(M, R)
+    policies_sorted = is_policies_sorted(policies)
+    hasse_edges = lattice_edges(policies, sorted=policies_sorted, M=M, R=R-1)
+
+    P_qe = RashomonSet(sigma.shape)
+    Q_seen = RashomonProblemCache(sigma.shape)
+    problems = RashomonSubproblemCache(sigma.shape)
+
+    for i in range(M):
+        if not np.isinf(sigma[i, 0]):
+            queue = deque([(sigma, i, 0)])
+            break
+
+    while len(queue) > 0:
+
+        (sigma, i, j) = queue.popleft()
+        sigma = np.copy(sigma)
+
+        if problems.seen(sigma, i, j):
+            continue
+        problems.insert(sigma, i, j)
+
+        if counter.num_pools(sigma) > H:
+            continue
+
+        sigma_0 = np.copy(sigma)
+        sigma_1 = np.copy(sigma)
+        sigma_1[i, j] = 1
+        sigma_0[i, j] = 0
+
+        for m in range(M):
+            R_m = R[m]
+
+            j1 = 0
+            while problems.seen(sigma_1, m, j1) and j1 < R_m - 3:
+                j1 += 1
+            if j1 <= R_m - 3 and not problems.seen(sigma_1, m, j1):
+                queue.append((sigma_1, m, j1))
+
+            j0 = 0
+            while problems.seen(sigma_0, m, j0) and j0 < R_m - 3:
+                j0 += 1
+            if j0 <= R_m - 3 and not problems.seen(sigma_0, m, j0):
+                queue.append((sigma_0, m, j0))
+
+        # No B-pruning for Bayesian loss (no valid lower bound)
+
+        if not Q_seen.seen(sigma_1):
+            Q_seen.insert(sigma_1)
+            Q = loss.compute_Q_bayes(D, y, sigma_1, policies, policy_means, reg, hasse_edges)
+            if Q <= theta:
+                P_qe.insert(sigma_1)
+
+        if not Q_seen.seen(sigma_0) and counter.num_pools(sigma_0) <= H:
+            Q_seen.insert(sigma_0)
+            Q = loss.compute_Q_bayes(D, y, sigma_0, policies, policy_means, reg, hasse_edges)
+            if Q <= theta:
+                P_qe.insert(sigma_0)
+
+        if j < R[i] - 3:
+            if not problems.seen(sigma_1, i, j + 1):
+                queue.append((sigma_1, i, j + 1))
+            if not problems.seen(sigma_0, i, j + 1):
+                queue.append((sigma_0, i, j + 1))
+
+    return P_qe
+
+
+def _brute_RAggregate_profile_bayes(M: int, R: int | np.ndarray, H: int, D: np.ndarray,
+                                    y: np.ndarray, theta: float, profile: tuple, reg: float = 1,
+                                    policies: list | None = None,
+                                    policy_means: np.ndarray | None = None) -> RashomonSet:
+    """
+    Brute-force RPS enumeration using the Bayesian Lemma A2 loss.
+    """
+
+    if policies is None or policy_means is None:
+        all_policies = enumerate_policies(M, R)
+        policies = [x for x in all_policies if policy_to_profile(x) == profile]
+        policy_means = loss.compute_policy_means(D, y, len(policies))
+
+    if np.max(R) == 2:
+        sigma = np.zeros(shape=(M, 1)) + np.inf
+        P_qe = RashomonSet(sigma.shape)
+        P_qe.insert(sigma)
+        P_qe.calculate_loss_bayes(D, y, policies, policy_means, reg)
+        return P_qe
+
+    sigma = initialize_sigma(M, R)
+
+    if isinstance(R, int):
+        R = [R] * M
+
+    P_qe = RashomonSet(sigma.shape)
+
+    indices_raw = np.where(sigma == 1)
+    idx_rows = indices_raw[0]
+    idx_cols = indices_raw[1]
+    indices = []
+    for i in range(len(idx_rows)):
+        indices.append((idx_rows[i], idx_cols[i]))
+
+    policies_sorted = is_policies_sorted(policies)
+    hasse_edges = lattice_edges(policies, sorted=policies_sorted, M=M, R=R-1)
+
+    for x in counter.powerset(indices):
+        sigma_x = sigma.copy()
+        for i, j in x:
+            sigma_x[i, j] = 0
+
+        Q = loss.compute_Q_bayes(D, y, sigma_x, policies, policy_means, reg, hasse_edges)
+        if Q <= theta:
+            P_qe.insert(sigma_x)
+            P_qe.Q = np.append(P_qe.Q, Q)
+
+    return P_qe
+
+
 if __name__ == "__init__":
 
     # Fix random seed

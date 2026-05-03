@@ -563,11 +563,12 @@ def global_loss_bayes(
     reg: float = 1.0,
     lattice_edges=None,
 ) -> float:
-    """Bayesian marginal log-loss from Lemma A2.
+    """Per-observation Bayesian marginal log-loss from Lemma A2.
 
-    Returns Q(Π) = (n-H)/2 · log(SSE) + λ'H + c(Π), where
+    Computes Q(Π) = (n-H)/2 · log(SSE) + λ'H + c(Π), where
       c(Π) = ½ Σ_h log(n_h) − log Γ((n-H)/2)
       λ'   = reg − ½ log(π)
+    and returns Q(Π) / n.
 
     Use as: score_s(state) = exp(-global_loss_bayes(state, ...))
     """
@@ -641,7 +642,7 @@ def global_loss_bayes(
     lamb_prime = reg - 0.5 * log(math.pi)
     c_Pi = 0.5 * log_nh_sum - gammaln((n - total_H) / 2.0)
     Q = (n - total_H) / 2.0 * log(total_SSE) + lamb_prime * total_H + c_Pi
-    return Q
+    return Q/n
 
 
 def global_loss_raw2(

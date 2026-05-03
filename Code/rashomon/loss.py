@@ -177,6 +177,32 @@ def compute_Q(D: np.ndarray, y: np.ndarray, sigma: np.ndarray, policies: list,
     return Q
 
 
+def compute_Q_bayes(D: np.ndarray, y: np.ndarray, sigma: np.ndarray, policies: list,
+                    policy_means: np.ndarray, reg: float = 1.0,
+                    lattice_edges=None) -> float:
+    """
+    Bayesian marginal posterior loss from Lemma A2:
+    Q(Pi) = (n-H)/2 * log(SSE) + lambda'*H + c(Pi)
+    where lambda' = reg - 0.5*log(pi), c(Pi) = 0.5*sum_h log(n_h) - logGamma((n-H)/2)
+    """
+    import math
+    from scipy.special import gammaln
+
+    mu_D, H = predict(D, sigma, policies, policy_means, lattice_edges, return_num_pools=True)
+    n = D.shape[0]
+    SSE = float(np.sum((y[:, 0] - mu_D) ** 2))
+
+    if SSE <= 0.0 or n <= H:
+        return float('inf')
+
+    pi_pools, _ = extract_pools(policies, sigma, lattice_edges)
+    n_h = np.array([float(np.sum(policy_means[pi_pools[h], 1])) for h in range(H)], dtype=float)
+
+    lamb_prime = reg - 0.5 * math.log(math.pi)
+    c_Pi = 0.5 * float(np.sum(np.log(np.maximum(n_h, 1)))) - gammaln((n - H) / 2.0)
+    return (n - H) / 2.0 * math.log(SSE) + lamb_prime * H + c_Pi
+
+
 def compute_B_slopes(D, X, y, sigma, i, j, policies, reg=1, normalize=0):
     """
     The B function in Theorem 6.3 \ref{thm:rashomon-equivalent-bound}

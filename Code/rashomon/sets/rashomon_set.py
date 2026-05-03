@@ -1,6 +1,6 @@
 import numpy as np
 
-from ..loss import compute_Q, compute_Q_slopes
+from ..loss import compute_Q, compute_Q_bayes, compute_Q_slopes
 from ..counter import num_pools
 
 
@@ -41,6 +41,13 @@ class RashomonSet:
             Q_sigma = compute_Q_slopes(D, X, y, sigma, policies, reg, normalize)
             Q_list.append(Q_sigma)
         return Q_list
+
+    def calculate_loss_bayes(self, D, y, policies, policy_means, reg, lattice_edges=None):
+        Q_list = []
+        for sigma in self.P_qe:
+            Q_sigma = compute_Q_bayes(D, y, sigma, policies, policy_means, reg, lattice_edges)
+            Q_list.append(Q_sigma)
+        self.Q = np.array(Q_list)
 
     def calculate_loss(self, D, y, policies, policy_means, reg, normalize=0, slopes=False, X=None):
         if not slopes:

@@ -90,6 +90,18 @@ def run_pac_bayes_explorer(
     return states, logs, trace
 
 
+def parse_theta_grid(theta_arg):
+    vals = []
+    for raw in theta_arg.split(","):
+        raw = raw.strip()
+        if "/" in raw:
+            num, den = raw.split("/", 1)
+            vals.append(float(num) / float(den))
+        else:
+            vals.append(float(raw))
+    return vals
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Scenario 1: MCMC, RPS, AIS-RPS, AIS-SSS, SSS, PB — Bayesian loss (Lemma A2)")
@@ -101,6 +113,10 @@ def main():
     parser.add_argument("--pb_delta", type=float, default=0.05, help="PB confidence parameter")
     parser.add_argument("--frontier_cap", type=int, default=500,
                         help="Max frontier candidates per PB step")
+    parser.add_argument("--thetas", type=str, default="5095/6000,5100/6000,5110/6000,5120/6000,5135/6000",
+                        help="Comma-separated Bayesian-loss RPS thresholds")
+    parser.add_argument("--theta_scale", choices=["per_obs", "total"], default="per_obs",
+                        help="Interpret --thetas as per-observation or total Bayesian-loss thresholds")
     args = parser.parse_args()
 
     epoch = args.epoch
@@ -110,10 +126,12 @@ def main():
     pb_steps = args.pb_steps
     pb_delta = args.pb_delta
     frontier_cap = args.frontier_cap
+    thetas = parse_theta_grid(args.thetas)
+    theta_scale = args.theta_scale
 
     print(
         f"Epoch {epoch} | eps1={eps1} eps2={eps2} | SSS steps={n_sss_steps} | "
-        f"PB steps={pb_steps} delta={pb_delta}"
+        f"PB steps={pb_steps} delta={pb_delta} | thetas={thetas} ({theta_scale})"
     )
     os.makedirs("./output_all", exist_ok=True)
 
@@ -285,28 +303,43 @@ def main():
 
         n_obs = int(y.shape[0])
         n_prior = int(len(all_partitions))
+        exact_global_losses = np.array([-ls for ls in true_log_post], dtype=float)
 
         cfg = AIS.AISConfig(
             n_paths=n_paths, n_levels=n_levels,
             moves_per_level=moves_per_level, min_len=1, seed=None,
         )
 
-        for theta in [7.8, 8, 8.2, 8.4, 8.6]:
+        for theta in thetas:
+            theta_rps = theta * n_obs if theta_scale == "per_obs" else theta
             H = np.inf
             R_set, R_profiles = aggregate.RAggregate(
-                M, R, H, D, y, theta, reg=lamb, verbose=False)
+                M, R, H, D, y, theta_rps, reg=lamb, verbose=False, use_bayes=True)
             anchors = AIS.build_anchor_states(R_set, R_profiles, M, R)
+            if len(anchors) == 0:
+                result[f"RPS_{theta}_n_states"] = 0
+                result[f"RPS_{theta}_theta_rps"] = theta_rps
+                continue
             log_alpha = [math.log(max(1e-300, score_s(A))) for A in anchors]
+            rps_losses = np.array([-ls for ls in log_alpha], dtype=float)
             RPS_states = AIS.raggregate_to_states((R_set, R_profiles), profiles)
 
-            result[f"RPS_{theta}_coverage"] = MCMC.posterior_mass_coverage(
+            d = theta
+            result[f"RPS_{d}_theta_rps"] = theta_rps
+            result[f"RPS_{d}_exact_global_n_states"] = int(
+                np.sum(exact_global_losses <= theta + 1e-10)
+            )
+            result[f"RPS_{d}_loss_min"] = float(np.min(rps_losses))
+            result[f"RPS_{d}_loss_max"] = float(np.max(rps_losses))
+            result[f"RPS_{d}_n_over_theta"] = int(np.sum(rps_losses > theta + 1e-10))
+            result[f"RPS_{d}_coverage"] = MCMC.posterior_mass_coverage(
                 log_alpha, true_log_post)
-            result[f"RPS_{theta}_n_states"] = len(RPS_states)
-            result[f"RPS_{theta}"] = AIS.estimate_policy_means_from_RPS(
+            result[f"RPS_{d}_n_states"] = len(RPS_states)
+            result[f"RPS_{d}"] = AIS.estimate_policy_means_from_RPS(
                 RPS_states, log_alpha, all_policies, policy_means,
                 prof_idx_of_policy, R, M, lattice_edges=None,
             )
-            result[f"RPS_{theta}_quantiles"] = MCMC.quantiles_for_all_policies_root(
+            result[f"RPS_{d}_quantiles"] = MCMC.quantiles_for_all_policies_root(
                 RPS_states, log_alpha, D, y, M, all_policies,
                 prof_idx_of_policy, R, lattice_edges=None,
                 mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
@@ -323,20 +356,20 @@ def main():
             )
             sss_states = [s for s, _ in sss_visited]
             sss_log_scores = [ls for _, ls in sss_visited]
-            result[f"SSS_{theta}_coverage"] = MCMC.posterior_mass_coverage(
+            result[f"SSS_{d}_coverage"] = MCMC.posterior_mass_coverage(
                 sss_log_scores, true_log_post)
-            result[f"SSS_{theta}_n_visited"] = len(sss_visited)
-            result[f"SSS_{theta}"] = AIS.estimate_policy_means_from_RPS(
+            result[f"SSS_{d}_n_visited"] = len(sss_visited)
+            result[f"SSS_{d}"] = AIS.estimate_policy_means_from_RPS(
                 sss_states, sss_log_scores, all_policies, policy_means,
                 prof_idx_of_policy, R, M, lattice_edges=None,
             )
-            result[f"SSS_{theta}_quantiles"] = MCMC.quantiles_for_all_policies_root(
+            result[f"SSS_{d}_quantiles"] = MCMC.quantiles_for_all_policies_root(
                 sss_states, sss_log_scores, D, y, M, all_policies,
                 prof_idx_of_policy, R, lattice_edges=None,
                 mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
                 p=[0.025, 0.5, 0.975], seed=None,
             )
-            result[f"SSS_{theta}_time"] = time.time() - start
+            result[f"SSS_{d}_time"] = time.time() - start
 
             # AIS seeded from RPS
             start = time.time()
@@ -347,23 +380,23 @@ def main():
                 R=R, eps1=eps1, eps2=eps2,
                 score_s=score_s, cfg=cfg,
                 out_dir="./output_all",
-                label=f"epoch{epoch}_iter{iter}_RPS_{theta}",
+                label=f"epoch{epoch}_iter{iter}_RPS_{d}",
             )
-            result[f"AIS_RPS_{theta}"] = AIS.estimate_policy_means_from_ais(
+            result[f"AIS_RPS_{d}"] = AIS.estimate_policy_means_from_ais(
                 ais_out=ais_rps_out, all_policies=all_policies,
                 policy_means=policy_means, prof_idx_of_policy=prof_idx_of_policy,
                 lattice_edges=None, R_per=R, M=M,
             )
-            result[f"AIS_RPS_{theta}_quantiles"] = AIS.ais_quantiles_for_all_policies_root(
+            result[f"AIS_RPS_{d}_quantiles"] = AIS.ais_quantiles_for_all_policies_root(
                 ais_rps_out, D, y, M, all_policies, prof_idx_of_policy, R,
                 lattice_edges=None, mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
                 p=[0.025, 0.5, 0.975], seed=None,
             )
-            result[f"AIS_RPS_{theta}_coverage"] = MCMC.posterior_mass_coverage(
+            result[f"AIS_RPS_{d}_coverage"] = MCMC.posterior_mass_coverage(
                 [math.log(max(1e-300, score_s(s))) for s in ais_rps_out.terminals],
                 true_log_post,
             )
-            result[f"AIS_RPS_{theta}_time"] = time.time() - start
+            result[f"AIS_RPS_{d}_time"] = time.time() - start
 
             # AIS seeded from SSS
             start = time.time()
@@ -374,23 +407,23 @@ def main():
                 R=R, eps1=eps1, eps2=eps2,
                 score_s=score_s, cfg=cfg,
                 out_dir="./output_all",
-                label=f"epoch{epoch}_iter{iter}_SSS_{theta}",
+                label=f"epoch{epoch}_iter{iter}_SSS_{d}",
             )
-            result[f"AIS_SSS_{theta}"] = AIS.estimate_policy_means_from_ais(
+            result[f"AIS_SSS_{d}"] = AIS.estimate_policy_means_from_ais(
                 ais_out=ais_sss_out, all_policies=all_policies,
                 policy_means=policy_means, prof_idx_of_policy=prof_idx_of_policy,
                 lattice_edges=None, R_per=R, M=M,
             )
-            result[f"AIS_SSS_{theta}_quantiles"] = AIS.ais_quantiles_for_all_policies_root(
+            result[f"AIS_SSS_{d}_quantiles"] = AIS.ais_quantiles_for_all_policies_root(
                 ais_sss_out, D, y, M, all_policies, prof_idx_of_policy, R,
                 lattice_edges=None, mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
                 p=[0.025, 0.5, 0.975], seed=None,
             )
-            result[f"AIS_SSS_{theta}_coverage"] = MCMC.posterior_mass_coverage(
+            result[f"AIS_SSS_{d}_coverage"] = MCMC.posterior_mass_coverage(
                 [math.log(max(1e-300, score_s(s))) for s in ais_sss_out.terminals],
                 true_log_post,
             )
-            result[f"AIS_SSS_{theta}_time"] = time.time() - start
+            result[f"AIS_SSS_{d}_time"] = time.time() - start
 
             # PB greedy explorer
             start = time.time()
@@ -406,27 +439,27 @@ def main():
                 frontier_cap=frontier_cap,
                 seed=iter * 42,
             )
-            result[f"PB_{theta}"] = AIS.estimate_policy_means_from_RPS(
+            result[f"PB_{d}"] = AIS.estimate_policy_means_from_RPS(
                 pb_states, pb_log_scores, all_policies, policy_means,
                 prof_idx_of_policy, R, M, lattice_edges=None,
             )
-            result[f"PB_{theta}_quantiles"] = MCMC.quantiles_for_all_policies_root(
+            result[f"PB_{d}_quantiles"] = MCMC.quantiles_for_all_policies_root(
                 pb_states, pb_log_scores, D, y, M, all_policies,
                 prof_idx_of_policy, R, lattice_edges=None,
                 mu0=0.0, kappa0=1.0, alpha0=2.0, beta0=2.0,
                 p=[0.025, 0.5, 0.975], seed=None,
             )
-            result[f"PB_{theta}_coverage"] = MCMC.posterior_mass_coverage(
+            result[f"PB_{d}_coverage"] = MCMC.posterior_mass_coverage(
                 pb_log_scores, true_log_post)
-            result[f"PB_{theta}_n_states"] = len(pb_states)
-            result[f"PB_{theta}_state_fraction"] = len(pb_states) / float(n_prior)
-            result[f"PB_{theta}_exhausted_state_space"] = len(pb_states) >= n_prior
-            result[f"PB_{theta}_bound"] = pb_trace[-1]["bound"]
-            result[f"PB_{theta}_risk"] = pb_trace[-1]["E_Q_risk"]
-            result[f"PB_{theta}_kl"] = pb_trace[-1]["kl"]
-            result[f"PB_{theta}_entropy"] = pb_trace[-1]["H_Q"]
-            result[f"PB_{theta}_trace"] = pb_trace
-            result[f"PB_{theta}_time"] = time.time() - start
+            result[f"PB_{d}_n_states"] = len(pb_states)
+            result[f"PB_{d}_state_fraction"] = len(pb_states) / float(n_prior)
+            result[f"PB_{d}_exhausted_state_space"] = len(pb_states) >= n_prior
+            result[f"PB_{d}_bound"] = pb_trace[-1]["bound"]
+            result[f"PB_{d}_risk"] = pb_trace[-1]["E_Q_risk"]
+            result[f"PB_{d}_kl"] = pb_trace[-1]["kl"]
+            result[f"PB_{d}_entropy"] = pb_trace[-1]["H_Q"]
+            result[f"PB_{d}_trace"] = pb_trace
+            result[f"PB_{d}_time"] = time.time() - start
 
         overall_result.append(result)
 
