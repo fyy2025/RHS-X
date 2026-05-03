@@ -128,7 +128,7 @@ def main():
     parser.add_argument("--epoch", type=int, required=True, help="Epoch number")
     parser.add_argument("--eps1", type=float, default=0.5, help="AIS eps1")
     parser.add_argument("--eps2", type=float, default=0.75, help="AIS eps2")
-    parser.add_argument("--pb_steps", type=int, default=300,
+    parser.add_argument("--pb_steps", type=int, default=20,
                         help="PAC-Bayes exploration steps per theta")
     parser.add_argument("--pb_delta", type=float, default=0.05,
                         help="PAC-Bayes confidence parameter")
@@ -364,6 +364,8 @@ def main():
             result[f"PB_{theta}_coverage"] = MCMC.posterior_mass_coverage(
                 pb_log_scores, true_log_post)
             result[f"PB_{theta}_n_states"] = len(pb_states)
+            result[f"PB_{theta}_state_fraction"] = len(pb_states) / float(n_prior)
+            result[f"PB_{theta}_exhausted_state_space"] = len(pb_states) >= n_prior
             result[f"PB_{theta}_bound"] = pb_trace[-1]["bound"]
             result[f"PB_{theta}_risk"] = pb_trace[-1]["E_Q_risk"]
             result[f"PB_{theta}_kl"] = pb_trace[-1]["kl"]

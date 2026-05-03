@@ -18,7 +18,7 @@ set -euo pipefail
 # --- Define Simulation Parameters ---
 EPS1=0.4
 EPS2=0.7
-PB_STEPS=300
+PB_STEPS=20
 PB_DELTA=0.05
 FRONTIER_CAP=500
 
