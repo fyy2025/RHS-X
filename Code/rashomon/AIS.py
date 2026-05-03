@@ -551,6 +551,99 @@ def global_loss_raw(
         # print(Q_k)
     return total
 
+
+def global_loss_bayes(
+    state,
+    D, y,
+    policies,
+    policy_means,
+    prof_idx_of_policy,
+    M: int,
+    R,
+    reg: float = 1.0,
+    lattice_edges=None,
+) -> float:
+    """Bayesian marginal log-loss from Lemma A2.
+
+    Returns Q(Π) = (n-H)/2 · log(SSE) + λ'H + c(Π), where
+      c(Π) = ½ Σ_h log(n_h) − log Γ((n-H)/2)
+      λ'   = reg − ½ log(π)
+
+    Use as: score_s(state) = exp(-global_loss_bayes(state, ...))
+    """
+    from math import log
+    from scipy.special import gammaln
+    from rashomon.extract_pools import extract_pools
+    from rashomon.loss import compute_pool_means
+
+    D_arr = np.asarray(D)
+    y_arr = np.asarray(y)
+    if D_arr.ndim == 1:
+        D_arr = D_arr.reshape(-1, 1)
+    if y_arr.ndim == 1:
+        y_arr = y_arr.reshape(-1, 1)
+
+    n = D_arr.shape[0]
+    num_profiles = len(state)
+    num_policies = len(policies)
+    pol_ids_by_profile = [
+        np.where(prof_idx_of_policy == k)[0] for k in range(num_profiles)
+    ]
+    pid_global = D_arr[:, 0].astype(int)
+
+    total_SSE = 0.0
+    total_H = 0
+    log_nh_sum = 0.0
+
+    for k in range(num_profiles):
+        part_k = state[k]
+        pol_ids = pol_ids_by_profile[k]
+        mask = np.isin(pid_global, pol_ids)
+        if not np.any(mask):
+            continue
+
+        D_k = D_arr[mask].copy()
+        y_k = y_arr[mask].ravel()
+
+        local_map = -np.ones(num_policies, dtype=int)
+        local_map[pol_ids] = np.arange(pol_ids.size, dtype=int)
+        D_k[:, 0] = local_map[D_k[:, 0].astype(int)]
+
+        policies_k = [policies[int(i)] for i in pol_ids]
+        pm_k = loss.compute_policy_means(D_k, y_k.reshape(-1, 1), len(policies_k))
+        Sigma_k = assemble_sigma_full_for_profile(part_k, M, R)
+
+        if Sigma_k is None:
+            # one-pool partition: grand mean of this profile's data
+            mu = float(np.mean(y_k))
+            sse_k = float(np.sum((y_k - mu) ** 2))
+            H_k = 1
+            n_h_list = [int(y_k.size)]
+        else:
+            pi_pools, pi_policies = extract_pools(policies_k, Sigma_k, lattice_edges)
+            mu_pools = compute_pool_means(pm_k, pi_pools)
+            H_k = len(mu_pools)
+            D_local = D_k[:, 0].astype(int)
+            y_hat = np.array([mu_pools[pi_policies[d]] for d in D_local])
+            sse_k = float(np.sum((y_k - y_hat) ** 2))
+            # n_h = number of observations in each pool
+            n_h_list = [
+                int(sum(pm_k[p, 1] for p in pi_pools[h])) for h in range(H_k)
+            ]
+
+        total_SSE += sse_k
+        total_H += H_k
+        log_nh_sum += sum(log(max(nh, 1)) for nh in n_h_list)
+
+    if total_SSE <= 0.0 or total_H >= n:
+        return float("inf")  # degenerate partition
+
+    lamb_prime = reg - 0.5 * log(math.pi)
+    c_Pi = 0.5 * log_nh_sum - gammaln((n - total_H) / 2.0)
+    Q = (n - total_H) / 2.0 * log(total_SSE) + lamb_prime * total_H + c_Pi
+    return Q
+
+
 def global_loss_raw2(
     state,                      # list[ProfilePart or raw sigma/None], length = num_profiles
     D, y,                       # D: (N,1) global policy ids; y: (N,) or (N,1)
