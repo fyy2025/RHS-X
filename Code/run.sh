@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 1. Submit simulation
-ID=$(sbatch --parsable submit3.slurm)
+ID=$(sbatch --parsable submit4.slurm)
 echo "Job $ID submitted."
 
 # 2. Run a "silent" background process on the login node
