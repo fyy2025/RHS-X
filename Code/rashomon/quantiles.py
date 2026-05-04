@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.special import stdtr, stdtrit
+from scipy.special import stdtr, stdtrit, ndtr, ndtri
 from scipy.optimize import brentq
 
 def q_mixture_t_root(k, w, mu, s, df, prob, xtol=1e-8, maxiter=100):
@@ -64,6 +64,56 @@ def q_mixture_t_root(k, w, mu, s, df, prob, xtol=1e-8, maxiter=100):
             args=(p,),
             xtol=xtol,
             maxiter=maxiter
+        )
+
+    return quantiles
+
+
+def q_mixture_normal_root(k, w, mu, s, prob, xtol=1e-8, maxiter=100):
+    """
+    Computes quantiles for a mixture of Normal distributions using Brent's method.
+
+    Inputs:
+    k       : (int) Number of components
+    w       : (array) Mixture weights (will be normalized)
+    mu      : (array) Location parameters
+    s       : (array) Scale parameters (std devs)
+    prob    : (array) Probabilities to solve for (e.g., [0.025, 0.5, 0.975])
+    xtol    : (float) Absolute tolerance for the root finder
+    maxiter : (int) Maximum iterations for the root finder
+    """
+    w = np.asarray(w, dtype=np.float64).ravel()
+    w = w / np.sum(w)
+    mu = np.asarray(mu, dtype=np.float64).ravel()
+    s = np.asarray(s, dtype=np.float64).ravel()
+    prob = np.atleast_1d(prob)
+
+    quantiles = np.zeros_like(prob, dtype=np.float64)
+
+    def obj_func(x, target_p):
+        mix_cdf = np.sum(w * ndtr((x - mu) / np.maximum(s, 1e-12)))
+        return mix_cdf - target_p
+
+    for i, p in enumerate(prob):
+        component_quantiles = mu + s * ndtri(p)
+        lower_bound = np.min(component_quantiles)
+        upper_bound = np.max(component_quantiles)
+
+        if np.isclose(lower_bound, upper_bound):
+            quantiles[i] = lower_bound
+            continue
+
+        eps = max(abs(upper_bound - lower_bound), 1.0) * 1e-8
+        lower_bound -= eps
+        upper_bound += eps
+
+        quantiles[i] = brentq(
+            obj_func,
+            a=lower_bound,
+            b=upper_bound,
+            args=(p,),
+            xtol=xtol,
+            maxiter=maxiter,
         )
 
     return quantiles

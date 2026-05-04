@@ -2282,26 +2282,14 @@ def _normal_mixture_cdf(u, logw, mu_k, std_k):
     return float(np.sum(w * vals))
 
 
-def _normal_mixture_quantile(logw, mu_k, std_k, alpha, tol=1e-8, maxiter=200):
-    """Binary search for the alpha-quantile of a weighted Normal mixture."""
-    eps = 1e-12
-    lo = float(np.min(mu_k - 6.0 * np.maximum(std_k, eps)))
-    hi = float(np.max(mu_k + 6.0 * np.maximum(std_k, eps)))
-
-    while _normal_mixture_cdf(lo, logw, mu_k, std_k) >= alpha:
-        lo -= max(1.0, 0.5 * abs(lo))
-    while _normal_mixture_cdf(hi, logw, mu_k, std_k) < alpha:
-        hi += max(1.0, 0.5 * abs(hi))
-
-    for _ in range(maxiter):
-        mid = 0.5 * (lo + hi)
-        if _normal_mixture_cdf(mid, logw, mu_k, std_k) < alpha:
-            lo = mid
-        else:
-            hi = mid
-        if abs(hi - lo) < tol:
-            break
-    return 0.5 * (lo + hi)
+def _normal_mixture_quantile(logw, mu_k, std_k, alpha, tol=1e-8, maxiter=100):
+    """Alpha-quantile of a weighted Normal mixture via Brent's method."""
+    w = _normalize_logw(logw)
+    result = quantiles.q_mixture_normal_root(
+        k=len(w), w=w, mu=mu_k, s=std_k,
+        prob=[alpha], xtol=tol, maxiter=maxiter,
+    )
+    return float(result[0])
 
 
 def ais_quantiles_normal_for_all_policies(
