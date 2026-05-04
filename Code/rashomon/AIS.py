@@ -563,20 +563,15 @@ def global_loss_bayes(
     reg: float = 1.0,
     lattice_edges=None,
 ) -> float:
-    """Per-observation Bayesian marginal log-loss from Lemma A2.
+    """Per-observation profile-additive Bayesian marginal log-loss.
 
-    Computes Q(Π) = (n-H)/2 · log(SSE) + λ'H + c(Π), where
-      c(Π) = ½ Σ_h log(n_h) − log Γ((n-H)/2)
-      λ'   = reg − ½ log(π)
-    and returns Q(Π) / n.
+    For each profile, compute the Lemma A2 loss
+      Q_k(Π_k) = (n_k-H_k)/2 · log(SSE_k) + λ'H_k + c(Π_k),
+    then return sum_k Q_k(Π_k) / n. This matches the profile-additive
+    objective used by RAggregate(..., use_bayes=True).
 
     Use as: score_s(state) = exp(-global_loss_bayes(state, ...))
     """
-    from math import log
-    from scipy.special import gammaln
-    from rashomon.extract_pools import extract_pools
-    from rashomon.loss import compute_pool_means
-
     D_arr = np.asarray(D)
     y_arr = np.asarray(y)
     if D_arr.ndim == 1:
@@ -587,14 +582,14 @@ def global_loss_bayes(
     n = D_arr.shape[0]
     num_profiles = len(state)
     num_policies = len(policies)
+    R = np.asarray(R, dtype=int)
+    C = max(1, int(np.maximum(R - 2, 0).max()))
     pol_ids_by_profile = [
         np.where(prof_idx_of_policy == k)[0] for k in range(num_profiles)
     ]
     pid_global = D_arr[:, 0].astype(int)
 
-    total_SSE = 0.0
-    total_H = 0
-    log_nh_sum = 0.0
+    total_Q = 0.0
 
     for k in range(num_profiles):
         part_k = state[k]
@@ -604,45 +599,34 @@ def global_loss_bayes(
             continue
 
         D_k = D_arr[mask].copy()
-        y_k = y_arr[mask].ravel()
+        y_k = y_arr[mask].copy()
 
         local_map = -np.ones(num_policies, dtype=int)
         local_map[pol_ids] = np.arange(pol_ids.size, dtype=int)
         D_k[:, 0] = local_map[D_k[:, 0].astype(int)]
 
         policies_k = [policies[int(i)] for i in pol_ids]
-        pm_k = loss.compute_policy_means(D_k, y_k.reshape(-1, 1), len(policies_k))
+        pm_k = loss.compute_policy_means(D_k, y_k, len(policies_k))
         Sigma_k = assemble_sigma_full_for_profile(part_k, M, R)
 
         if Sigma_k is None:
-            # one-pool partition: grand mean of this profile's data
-            mu = float(np.mean(y_k))
-            sse_k = float(np.sum((y_k - mu) ** 2))
-            H_k = 1
-            n_h_list = [int(y_k.size)]
+            Sigma_k = np.full((M, C), np.inf, dtype=float)
+
+        Q_k = loss.compute_Q_bayes(
+            D=D_k,
+            y=y_k,
+            sigma=Sigma_k,
+            policies=policies_k,
+            policy_means=pm_k,
+            reg=reg,
+            lattice_edges=lattice_edges,
+        )
+        if np.isfinite(Q_k):
+            total_Q += float(Q_k)
         else:
-            pi_pools, pi_policies = extract_pools(policies_k, Sigma_k, lattice_edges)
-            mu_pools = compute_pool_means(pm_k, pi_pools)
-            H_k = len(mu_pools)
-            D_local = D_k[:, 0].astype(int)
-            y_hat = np.array([mu_pools[pi_policies[d]] for d in D_local])
-            sse_k = float(np.sum((y_k - y_hat) ** 2))
-            # n_h = number of observations in each pool
-            n_h_list = [
-                int(sum(pm_k[p, 1] for p in pi_pools[h])) for h in range(H_k)
-            ]
+            return float("inf")
 
-        total_SSE += sse_k
-        total_H += H_k
-        log_nh_sum += sum(log(max(nh, 1)) for nh in n_h_list)
-
-    if total_SSE <= 0.0 or total_H >= n:
-        return float("inf")  # degenerate partition
-
-    lamb_prime = reg - 0.5 * log(math.pi)
-    c_Pi = 0.5 * log_nh_sum - gammaln((n - total_H) / 2.0)
-    Q = (n - total_H) / 2.0 * log(total_SSE) + lamb_prime * total_H + c_Pi
-    return Q/n
+    return total_Q / float(n)
 
 
 def global_loss_raw2(
@@ -2116,6 +2100,281 @@ def extract_policy_mu_sigma_flat(
     return mu, t_scale, df
 
 
+# ---------------------------------------------------------------------------
+# Normal posterior (sigma^2 known, fixed from saturated model)
+# Paper eq. 3: gamma_h | Pi, Z, sigma^2 ~ N(g/(g+1)*gamma_hat_h, g/(g+1)*sigma^2/n_h)
+# ---------------------------------------------------------------------------
+
+def compute_sigma2_saturated(D, y, policies):
+    """Estimate sigma^2 from the saturated model (each policy its own pool)."""
+    y1 = y[:, 0] if (isinstance(y, np.ndarray) and y.ndim == 2) else np.asarray(y).ravel()
+    pid_all = D[:, 0].astype(int)
+    P = len(policies)
+    SSE = 0.0
+    for k in range(P):
+        y_k = y1[pid_all == k]
+        if len(y_k) > 1:
+            SSE += float(np.sum((y_k - np.mean(y_k)) ** 2))
+    dof = len(y1) - P
+    return SSE / dof if dof > 0 else 1.0
+
+
+def extract_policy_mu_sigma_normal(
+    state,
+    D, y,
+    M,
+    policies,
+    prof_idx_of_policy,
+    R_per,
+    g=1.0,
+    sigma2=None,
+    lattice_edges=None,
+):
+    """
+    Normal posterior for pool means given fixed sigma^2 (paper eq. 3).
+
+        gamma_h | Pi, Z, sigma^2 ~ N(g/(g+1) * gamma_hat_h,  g/(g+1) * sigma^2 / n_h)
+
+    Parameters
+    ----------
+    sigma2 : float or None
+        Known noise variance. If None, estimated from the saturated model via
+        compute_sigma2_saturated.
+
+    Returns
+    -------
+    mu  : np.ndarray (P,)  -- posterior mean per policy
+    std : np.ndarray (P,)  -- posterior std  per policy
+    """
+    if sigma2 is None:
+        sigma2 = compute_sigma2_saturated(D, y, policies)
+
+    P = len(policies)
+    y1 = y[:, 0] if (isinstance(y, np.ndarray) and y.ndim == 2) else np.asarray(y).ravel()
+    pid_all = D[:, 0].astype(int)
+    K = int(np.max(prof_idx_of_policy)) + 1
+    shrink = g / (g + 1.0)
+
+    prof_to_global = [[] for _ in range(K)]
+    for pid in range(P):
+        prof_to_global[int(prof_idx_of_policy[pid])].append(pid)
+
+    prof_policies = [[policies[i] for i in idxs] for idxs in prof_to_global]
+    prof_pid_to_local = [{pid: j for j, pid in enumerate(idxs)} for idxs in prof_to_global]
+
+    prof_data_idx = []
+    for k in range(K):
+        idxs = np.array(prof_to_global[k], dtype=int)
+        if idxs.size == 0:
+            prof_data_idx.append(np.array([], dtype=int))
+            continue
+        prof_data_idx.append(np.flatnonzero(np.isin(pid_all, idxs)))
+
+    mu = np.zeros(P, float)
+    std = np.zeros(P, float)
+
+    for k in range(K):
+        idxs = prof_to_global[k]
+        if not idxs:
+            continue
+
+        sigma_full_k = assemble_sigma_full_for_profile(state[k], M, np.asarray(R_per, int))
+        pi_pools_k, pi_policies_k = extract_pools.extract_pools(
+            prof_policies[k], sigma_full_k, lattice_edges
+        )
+        n_pools = len(pi_pools_k)
+
+        n_h = np.zeros(n_pools, int)
+        sy = np.zeros(n_pools, float)
+
+        didx = prof_data_idx[k]
+        pid2loc = prof_pid_to_local[k]
+        for pid_obs, y_obs in zip(pid_all[didx], y1[didx]):
+            pool = pi_policies_k[pid2loc[int(pid_obs)]]
+            n_h[pool] += 1
+            sy[pool] += float(y_obs)
+
+        gamma_hat = np.where(n_h > 0, sy / np.maximum(n_h, 1), 0.0)
+        pool_mu = shrink * gamma_hat
+        pool_std = np.sqrt(shrink * sigma2 / np.maximum(n_h, 1))
+
+        for local_idx, pid in enumerate(idxs):
+            pool_id = pi_policies_k[local_idx]
+            mu[pid] = pool_mu[pool_id]
+            std[pid] = pool_std[pool_id]
+
+    return mu, std
+
+
+def extract_policy_posteriors_normal(
+    ais_sample,
+    D, y,
+    M,
+    policies,
+    prof_idx_of_policy,
+    R,
+    g=1.0,
+    sigma2=None,
+    lattice_edges=None,
+):
+    """Like extract_policy_posteriors_from_ais_sample but returns Normal parameters.
+
+    Returns
+    -------
+    logw : ndarray (n_particles,)
+    mu   : ndarray (n_particles, n_policies)
+    std  : ndarray (n_particles, n_policies)
+    """
+    if sigma2 is None:
+        sigma2 = compute_sigma2_saturated(D, y, policies)
+
+    logw, mu_list, std_list = [], [], []
+    for state, lw in zip(ais_sample.terminals, ais_sample.logw):
+        mu_i, std_i = extract_policy_mu_sigma_normal(
+            state=state, D=D, y=y, M=M,
+            policies=policies, prof_idx_of_policy=prof_idx_of_policy,
+            R_per=R, g=g, sigma2=sigma2, lattice_edges=lattice_edges,
+        )
+        logw.append(lw)
+        mu_list.append(mu_i)
+        std_list.append(std_i)
+
+    return np.asarray(logw), np.asarray(mu_list), np.asarray(std_list)
+
+
+def extract_policy_posteriors_normal_from_states(
+    states,
+    logw,
+    D, y,
+    M,
+    policies,
+    prof_idx_of_policy,
+    R,
+    g=1.0,
+    sigma2=None,
+    lattice_edges=None,
+):
+    """Same as extract_policy_posteriors_normal but for a plain list of states + logw.
+    Used for MCMC, RPS, and exact enumeration.
+    """
+    if sigma2 is None:
+        sigma2 = compute_sigma2_saturated(D, y, policies)
+
+    mu_list, std_list = [], []
+    for state in states:
+        mu_i, std_i = extract_policy_mu_sigma_normal(
+            state=state, D=D, y=y, M=M,
+            policies=policies, prof_idx_of_policy=prof_idx_of_policy,
+            R_per=R, g=g, sigma2=sigma2, lattice_edges=lattice_edges,
+        )
+        mu_list.append(mu_i)
+        std_list.append(std_i)
+
+    return np.asarray(logw), np.asarray(mu_list), np.asarray(std_list)
+
+
+from scipy.stats import norm as _scipy_norm
+
+def _normal_mixture_cdf(u, logw, mu_k, std_k):
+    """Weighted Normal mixture CDF at u."""
+    w = _normalize_logw(logw)
+    vals = _scipy_norm.cdf((u - mu_k) / np.maximum(std_k, 1e-12))
+    return float(np.sum(w * vals))
+
+
+def _normal_mixture_quantile(logw, mu_k, std_k, alpha, tol=1e-8, maxiter=200):
+    """Binary search for the alpha-quantile of a weighted Normal mixture."""
+    eps = 1e-12
+    lo = float(np.min(mu_k - 6.0 * np.maximum(std_k, eps)))
+    hi = float(np.max(mu_k + 6.0 * np.maximum(std_k, eps)))
+
+    while _normal_mixture_cdf(lo, logw, mu_k, std_k) >= alpha:
+        lo -= max(1.0, 0.5 * abs(lo))
+    while _normal_mixture_cdf(hi, logw, mu_k, std_k) < alpha:
+        hi += max(1.0, 0.5 * abs(hi))
+
+    for _ in range(maxiter):
+        mid = 0.5 * (lo + hi)
+        if _normal_mixture_cdf(mid, logw, mu_k, std_k) < alpha:
+            lo = mid
+        else:
+            hi = mid
+        if abs(hi - lo) < tol:
+            break
+    return 0.5 * (lo + hi)
+
+
+def ais_quantiles_normal_for_all_policies(
+    ais_sample,
+    D, y,
+    M,
+    policies,
+    prof_idx_of_policy,
+    R,
+    g=1.0,
+    sigma2=None,
+    lattice_edges=None,
+    p=[0.025, 0.5, 0.975],
+):
+    """
+    Normal-posterior quantiles for every policy from AIS output.
+
+    Uses the paper's model (eq. 3) with sigma^2 fixed:
+        gamma_h | Pi, Z, sigma^2 ~ N(g/(g+1)*gamma_hat_h, g/(g+1)*sigma^2/n_h)
+    """
+    if sigma2 is None:
+        sigma2 = compute_sigma2_saturated(D, y, policies)
+
+    logw, mu, std = extract_policy_posteriors_normal(
+        ais_sample, D, y, M, policies, prof_idx_of_policy, R,
+        g=g, sigma2=sigma2, lattice_edges=lattice_edges,
+    )
+
+    output = {}
+    n_policies = mu.shape[1]
+    for quantile in p:
+        q = np.empty(n_policies, float)
+        for k in range(n_policies):
+            q[k] = _normal_mixture_quantile(logw, mu[:, k], std[:, k], alpha=quantile)
+        output[str(quantile)] = q
+    return output
+
+
+def states_quantiles_normal_for_all_policies(
+    states,
+    logw,
+    D, y,
+    M,
+    policies,
+    prof_idx_of_policy,
+    R,
+    g=1.0,
+    sigma2=None,
+    lattice_edges=None,
+    p=[0.025, 0.5, 0.975],
+):
+    """
+    Normal-posterior quantiles for every policy from a list of states + log-weights.
+    Drop-in replacement for MCMC.quantiles_for_all_policies_root / exact enumeration.
+    """
+    if sigma2 is None:
+        sigma2 = compute_sigma2_saturated(D, y, policies)
+
+    logw_arr, mu, std = extract_policy_posteriors_normal_from_states(
+        states, logw, D, y, M, policies, prof_idx_of_policy, R,
+        g=g, sigma2=sigma2, lattice_edges=lattice_edges,
+    )
+
+    output = {}
+    n_policies = mu.shape[1]
+    for quantile in p:
+        q = np.empty(n_policies, float)
+        for k in range(n_policies):
+            q[k] = _normal_mixture_quantile(logw_arr, mu[:, k], std[:, k], alpha=quantile)
+        output[str(quantile)] = q
+    return output
+
+
 def extract_policy_posteriors_from_ais_sample(
     ais_sample,
     D, y,                     # D[:,0] = global policy id; y is (N,) or (N,1)
@@ -2471,3 +2730,102 @@ def random_partition_state_uniform_bits(
         out.append(ProfilePart(cov_ids=tuple(cov.tolist()), B=B))
 
     return out
+
+
+# ---------------------------------------------------------------------------
+# PAC-Bayes helpers
+# ---------------------------------------------------------------------------
+
+def pac_bayes_bound(log_scores, n_obs, n_prior, delta=0.05):
+    """Rockova-style PAC-Bayes bound for a Gibbs posterior over a visited set."""
+    ls = np.asarray(log_scores, dtype=float)
+    ls = ls[np.isfinite(ls)]
+    if len(ls) == 0:
+        return {"bound": np.inf, "E_Q_risk": np.inf, "kl": np.inf, "H_Q": 0.0}
+    lw = ls - ls.max()
+    q  = np.exp(lw); q /= q.sum()
+    e_q_loss  = -ls.max() - float(np.dot(q, lw))
+    e_q_risk  = e_q_loss / float(n_obs)
+    h_q       = float(-np.dot(q, np.log(np.maximum(q, 1e-300))))
+    kl        = max(float(np.log(n_prior) - h_q), 0.0)
+    penalty   = np.log(2.0 * np.sqrt(float(n_obs)) / delta)
+    bound     = e_q_risk + float(np.sqrt((kl + penalty) / (2.0 * n_obs)))
+    return {"bound": bound, "E_Q_risk": e_q_risk, "kl": kl, "H_Q": h_q}
+
+
+def run_pac_bayes_explorer(
+    init_states,
+    init_log_scores,
+    score_s,
+    n_obs,
+    n_prior,
+    n_steps=300,
+    delta=0.05,
+    min_len=1,
+    frontier_cap=500,
+    seed=None,
+):
+    """
+    Greedy PAC-Bayes state-space explorer seeded from an initial set of states.
+    At each step, adds the frontier neighbor that minimises the PAC-Bayes bound.
+
+    Returns:
+        states (list): All visited states.
+        logs (list): Corresponding log-scores.
+        trace (list[dict]): PAC-Bayes bound dict at each step.
+    """
+    rng = np.random.default_rng(seed)
+    visited    = {}
+    log_scores = []
+
+    def add_visited(state, log_score):
+        sig = state_signature(state)
+        if sig in visited:
+            return False
+        visited[sig] = (state, float(log_score))
+        log_scores.append(float(log_score))
+        return True
+
+    def score_state(state):
+        import math
+        return math.log(max(1e-300, score_s(state)))
+
+    for state, log_score in zip(init_states, init_log_scores):
+        add_visited(state, log_score)
+
+    frontier = {}
+
+    def add_neighbors(state):
+        for nb in state_neighbors_ubs(state, min_len=min_len):
+            sig = state_signature(nb)
+            if sig not in visited and sig not in frontier:
+                frontier[sig] = nb
+
+    for state, _ in visited.values():
+        add_neighbors(state)
+
+    trace = [pac_bayes_bound(log_scores, n_obs, n_prior, delta=delta)]
+
+    for _ in range(n_steps):
+        if not frontier:
+            break
+        items = list(frontier.items())
+        if frontier_cap is not None and len(items) > frontier_cap:
+            idx   = rng.choice(len(items), size=frontier_cap, replace=False)
+            items = [items[i] for i in idx]
+
+        chosen_sig, chosen_state, chosen_log_score, chosen_bound = None, None, None, None
+        for sig, state in items:
+            ls = score_state(state)
+            cb = pac_bayes_bound(log_scores + [ls], n_obs, n_prior, delta=delta)
+            if chosen_bound is None or cb["bound"] < chosen_bound["bound"]:
+                chosen_sig, chosen_state, chosen_log_score, chosen_bound = sig, state, ls, cb
+
+        frontier.pop(chosen_sig, None)
+        add_visited(chosen_state, chosen_log_score)
+        add_neighbors(chosen_state)
+        trace.append(chosen_bound)
+
+    states = [state for state, _ in visited.values()]
+    logs   = [ls    for _,     ls in visited.values()]
+    return states, logs, trace
