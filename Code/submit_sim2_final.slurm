@@ -2,7 +2,7 @@
 
 #SBATCH --job-name=sim2_final
 #SBATCH --account=escience
-#SBATCH --partition=cpu-g2
+#SBATCH --partition=cpu-g2-mem2x
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --mem=32G
