@@ -2,7 +2,7 @@
 
 #SBATCH --job-name=sim2_final
 #SBATCH --account=escience
-#SBATCH --partition=cpu-g2
+#SBATCH --partition=cpu-g2-mem2x
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --mem=32G
@@ -11,7 +11,7 @@
 #SBATCH --output=log/%x_%A_%a.out
 #SBATCH --error=log/%x_%A_%a.err
 #SBATCH --mail-type=FAIL,KILL,END
-#SBATCH --mail-user=fyy2030@uw.edu
+#SBATCH --mail-user=span18@uw.edu
 
 set -euo pipefail
 
