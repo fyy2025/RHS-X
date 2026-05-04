@@ -10,8 +10,8 @@
 #SBATCH --array=1-10
 #SBATCH --output=log/%x_%A_%a.out
 #SBATCH --error=log/%x_%A_%a.err
-#SBATCH --mail-type=FAIL,KILL,END
-#SBATCH --mail-user=span18@uw.edu
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=fyy2030@uw.edu
 
 set -euo pipefail
 
