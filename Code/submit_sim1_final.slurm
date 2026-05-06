@@ -21,13 +21,12 @@ EPS2=0.7
 PB_STEPS=20
 PB_DELTA=0.05
 FRONTIER_CAP=500
-THETA_INIT=7.8
-EPSILONS="0.25,0.30,0.35,0.40,0.45"
+THETAS="7.8,8.0,8.2,8.4,8.6"
 
 echo "Running on $(hostname)"
 echo "Started at $(date)"
 echo "Executing Array Task ID: $SLURM_ARRAY_TASK_ID"
-echo "Parameters: EPS1=${EPS1}, EPS2=${EPS2}, PB_STEPS=${PB_STEPS}, PB_DELTA=${PB_DELTA}, FRONTIER_CAP=${FRONTIER_CAP}, THETA_INIT=${THETA_INIT}, EPSILONS=${EPSILONS}"
+echo "Parameters: EPS1=${EPS1}, EPS2=${EPS2}, PB_STEPS=${PB_STEPS}, PB_DELTA=${PB_DELTA}, FRONTIER_CAP=${FRONTIER_CAP}, THETAS=${THETAS}"
 
 cd $HOME/RHS-X/Code
 
@@ -45,8 +44,7 @@ python simulation_scenario1_final.py \
     --pb_steps $PB_STEPS \
     --pb_delta $PB_DELTA \
     --frontier_cap $FRONTIER_CAP \
-    --theta_init $THETA_INIT \
-    --epsilons "$EPSILONS"
+    --thetas "$THETAS"
 
 zip -r "results_sim1_final_${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}.zip" output/
 
