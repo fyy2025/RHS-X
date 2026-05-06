@@ -8,7 +8,7 @@ Code/CTL
 # Large datasets
 Results/simulation_4_rashomon*.csv
 Results/reff*
-Results/nhanes*
+# Results/nhanes*
 Results/4arms*
 Results/microfinance/
 Results/TE/
