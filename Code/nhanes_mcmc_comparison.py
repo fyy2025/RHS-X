@@ -31,7 +31,7 @@ from rashomon.sets import RashomonSet
 # ---------------------------------------------------------------------------
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--data_csv",    default="../Data/NHANES_telomere.csv",
+    p.add_argument("--data_csv",    default="../Dat/NHANES_telomere.csv",
                    help="Path to NHANES_telomere.csv")
     p.add_argument("--out_dir",     default="./output_nhanes_mcmc",
                    help="All outputs (and default input lookups) go here")

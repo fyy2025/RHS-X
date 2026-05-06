@@ -19,7 +19,7 @@ echo "Started at $(date)"
 
 cd $HOME/RHS-X/Code
 
-mkdir -p output_charity_mcmc log
+mkdir -p log
 
 source venv/bin/activate
 
@@ -27,7 +27,7 @@ echo "Using python: $(which python)"
 python --version
 
 python charity_mcmc_comparison.py \
-    --data_dta    ../Data/Does_Price_Matter_AER_merged.dta \
+    --data_dta    ../Dat/Does_Price_Matter_AER_merged.dta \
     --out_dir     ./output_charity_mcmc \
     --mcmc_steps  50000 \
     --mcmc_burnin 20000 \

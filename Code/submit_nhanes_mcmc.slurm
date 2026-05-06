@@ -27,7 +27,7 @@ echo "Using python: $(which python)"
 python --version
 
 python nhanes_mcmc_comparison.py \
-    --data_csv    ../Data/NHANES_telomere.csv \
+    --data_csv    ../Dat/NHANES_telomere.csv \
     --out_dir     ./output_nhanes_mcmc \
     --mcmc_steps  50000 \
     --mcmc_burnin 20000 \
