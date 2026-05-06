@@ -35,8 +35,8 @@ def parse_args():
                    help="Path to NHANES_telomere.csv")
     p.add_argument("--out_dir",     default="./output_nhanes_mcmc",
                    help="All outputs (and default input lookups) go here")
-    p.add_argument("--rps_pkl",     default="../Results/nhanes_pruned_results_outlier.pkl",
-                   help="Pre-computed RPS pickle")
+    p.add_argument("--rps_pkl",     default=None,
+                   help="nhanes_pruned_results_outlier.pkl (default: <out_dir>/nhanes_pruned_results_outlier.pkl)")
     p.add_argument("--ais_jsonl",   default=None,
                    help="AIS_nhanes_samples300.jsonl (default: <out_dir>/AIS_nhanes_samples300.jsonl)")
     p.add_argument("--pb_pkl",      default=None,
@@ -130,10 +130,21 @@ def enumerate_rashomon(D_race, y_race, policy_means_race, D_remapped, y,
     all_active_profile = tuple([1] * M)
     n_per_race = len(policy_race)
 
+    # Compute finite policy means for each race (no -inf sentinels).
+    # -inf in policy_means_race is only safe for score_s lookups where the
+    # missing policy never appears in D; RAggregate_profile merges policies
+    # across partitions, so a -inf mean poisons pool means for real observations.
+    pm_fresh = {}
+    for race in race_profiles:
+        pm = loss.compute_policy_means(D_race[race], y_race[race], n_per_race)
+        nodata = np.where(pm[:, 1] == 0)[0]
+        pm[nodata, 0] = 0.0   # finite placeholder; these policies absent from D
+        pm_fresh[race] = pm
+
     eq_lb_profiles = np.zeros(3)
     for k, race in enumerate(race_profiles):
         eq_lb_profiles[k] = find_profile_lower_bound(
-            D_race[race], y_race[race], policy_means_race[race]
+            D_race[race], y_race[race], pm_fresh[race]
         )
     eq_lb_profiles /= num_data
     eq_lb_sum = float(np.sum(eq_lb_profiles))
@@ -148,12 +159,12 @@ def enumerate_rashomon(D_race, y_race, policy_means_race, D_remapped, y,
             M, R, H_profile,
             D_race[race], y_race[race], theta_k,
             all_active_profile, reg,
-            policies_masked, policy_means_race[race],
+            policies_masked, pm_fresh[race],
             normalize=num_data,
         )
         rk.calculate_loss(
             D_race[race], y_race[race], policies_masked,
-            policy_means_race[race], reg, normalize=num_data,
+            pm_fresh[race], reg, normalize=num_data,
         )
         rk.sort()
         rashomon_profiles.append(rk)
@@ -161,8 +172,7 @@ def enumerate_rashomon(D_race, y_race, policy_means_race, D_remapped, y,
 
     pm_hom = loss.compute_policy_means(D_remapped, y, n_per_race)
     nodata_h = np.where(pm_hom[:, 1] == 0)[0]
-    pm_hom[nodata_h, 0] = -np.inf
-    pm_hom[nodata_h, 1] = 1
+    pm_hom[nodata_h, 0] = 0.0   # finite placeholder
 
     rashomon_homogeneous = RAggregate_profile(
         M, R, H, D_remapped, y, theta,
@@ -234,7 +244,7 @@ def make_score_s(D_race, y_race, policy_race, M, R, num_data, reg):
 def main():
     args = parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
-    rps_pkl   = args.rps_pkl
+    rps_pkl   = args.rps_pkl   or os.path.join(args.out_dir, "nhanes_pruned_results_outlier.pkl")
     ais_jsonl = args.ais_jsonl or os.path.join(args.out_dir, "AIS_nhanes_samples300.jsonl")
     pb_pkl    = args.pb_pkl    or os.path.join(args.out_dir, "PB_nhanes_steps300.pkl")
     out_pkl   = os.path.join(args.out_dir, "nhanes_mcmc_comparison.pkl")
