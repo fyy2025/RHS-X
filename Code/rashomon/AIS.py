@@ -360,8 +360,12 @@ def sample_p0(buckets: P0BucketsWeightedS0, RPS: List[State], R_per: np.ndarray)
     if rn > buckets.eps2:
         s = random_state_uniform(RPS[0], R_per)
     elif rn >= buckets.eps1:
-        sig = random.choice(tuple(buckets.S1_sigs))
-        s = _copy_state(buckets.S1_map[sig])
+        if buckets.size_S1 == 0:
+            # S1 is empty (all neighbors already in S0); fall back to uniform draw
+            s = random_state_uniform(RPS[0], R_per)
+        else:
+            sig = random.choice(tuple(buckets.S1_sigs))
+            s = _copy_state(buckets.S1_map[sig])
     return s
 
 
