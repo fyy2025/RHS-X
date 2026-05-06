@@ -109,20 +109,18 @@ def main():
     print(f"  {len(R_set)} states in Rashomon set ({time.time()-t0:.1f}s)")
 
     # --- RPS states + score_s ---
-    def score_s(state):
-        Q = AIS.global_loss_raw(
-            state=state, D=D, y=y, M=M, R=R,
-            prof_idx_of_policy=prof_idx_of_policy,
-            policies=all_policies, policy_means=policy_means,
-            reg=reg, lattice_edges=None,
-        )
-        return float(np.exp(-Q))
-
     RPS_states = AIS.raggregate_to_states((R_set, rashomon_profiles), profiles_hasse)
-    log_alpha  = [math.log(max(1e-300, score_s(s))) for s in RPS_states]
-    print(f"Built {len(RPS_states)} RPS states")
 
     sigma2 = AIS.compute_sigma2_saturated(D, y, all_policies)
+    score_s = AIS.make_score_s_gprior(
+        D=D, y=y, M=M, R=R,
+        prof_idx_of_policy=prof_idx_of_policy,
+        policies=all_policies, policy_means=policy_means,
+        g=float(num_data), sigma2=sigma2, lam=reg,
+    )
+
+    log_alpha  = [math.log(max(1e-300, score_s(s))) for s in RPS_states]
+    print(f"Built {len(RPS_states)} RPS states")
     normal_kw = dict(
         D=D, y=y, M=M,
         policies=all_policies,

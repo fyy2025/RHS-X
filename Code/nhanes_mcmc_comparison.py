@@ -207,36 +207,6 @@ def build_rps_states(R_set_2, rashomon_profiles, rashomon_homogeneous, M, R):
     return RPS_states
 
 
-# ---------------------------------------------------------------------------
-# score_s  (mirrors notebook cell 28)
-# ---------------------------------------------------------------------------
-def make_score_s(D_race, y_race, policy_race, M, R, num_data, reg):
-    n_per_race = len(policy_race)
-
-    def score_s_nhanes(state):
-        total_loss = 0.0
-        for race_idx, race in enumerate([1, 2, 3]):
-            pp = state[race_idx]
-            sigma_full = AIS.assemble_sigma_full_for_profile(pp, M, R)
-            D_k = D_race[race]
-            y_k = y_race[race]
-            pm_k = loss.compute_policy_means(D_k, y_k, n_per_race)
-            if sigma_full is None:
-                y_flat = np.asarray(y_k).ravel()
-                mu_k = float(np.mean(y_flat)) if y_flat.size else 0.0
-                mse_k = (float(np.mean((y_flat - mu_k) ** 2))
-                         * y_flat.size / num_data if y_flat.size else 0.0)
-                Q_k = mse_k + reg
-            else:
-                Q_k = float(loss.compute_Q(
-                    D_k, y_k, sigma_full, policy_race, pm_k,
-                    reg=reg, normalize=num_data,
-                ))
-            total_loss += Q_k
-        return float(np.exp(-total_loss))
-
-    return score_s_nhanes
-
 
 # ---------------------------------------------------------------------------
 # Main
@@ -298,10 +268,13 @@ def main():
     log_alpha  = list(-model_losses_2)
     print(f"Built {len(RPS_states)} RPS states")
 
-    score_s = make_score_s(D_race, y_race, policy_race, M, R, num_data, reg)
-
-    # Shared quantile kwargs
     sigma2 = AIS.compute_sigma2_saturated(D_nhanes, y, policies_nhanes)
+    score_s = AIS.make_score_s_gprior(
+        D=D_nhanes, y=y, M=M, R=R,
+        prof_idx_of_policy=prof_idx_nhanes,
+        policies=policies_nhanes, policy_means=policy_means_nhanes,
+        g=float(num_data), sigma2=sigma2, lam=reg,
+    )
     normal_kw = dict(
         D=D_nhanes, y=y, M=M,
         policies=policies_nhanes,
