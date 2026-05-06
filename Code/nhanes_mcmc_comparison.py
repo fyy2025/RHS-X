@@ -34,7 +34,7 @@ def parse_args():
     p.add_argument("--data_csv",            default="../Dat/NHANES_telomere.csv")
     p.add_argument("--out_dir",             default="./output_nhanes_mcmc")
     p.add_argument("--rps_pkl",             default=None,
-                   help="nhanes_pruned_results_outlier.pkl (default: <out_dir>/nhanes_pruned_results_outlier.pkl)")
+                   help="nhanes_pruned_results_outlier.pkl (default: ../Results/nhanes_pruned_results_outlier.pkl)")
     # MCMC
     p.add_argument("--mcmc_steps",          type=int,   default=50000)
     p.add_argument("--mcmc_burnin",         type=int,   default=20000)
@@ -219,7 +219,7 @@ def build_rps_states(R_set_2, rashomon_profiles, rashomon_homogeneous, M, R):
 def main():
     args = parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
-    rps_pkl = args.rps_pkl or os.path.join(args.out_dir, "nhanes_pruned_results_outlier.pkl")
+    rps_pkl = "../Results/nhanes_pruned_results_outlier.pkl"
     out_pkl = os.path.join(args.out_dir, "nhanes_mcmc_comparison.pkl")
     np.random.seed(args.seed)
 
