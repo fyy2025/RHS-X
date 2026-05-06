@@ -100,6 +100,8 @@ def _unit_shift_row_neighbors(row: np.ndarray, need: Optional[int] = None) -> Li
 
 def profile_part_neighbors_ubs(part: ProfilePart, min_len=1) -> List[ProfilePart]:
     '''Neighbour of a profile, iterating over all rows of B, extract neighbors of every row'''
+    if part.B is None:
+        return []
     C, R = part.B.shape
     out=[]
     for r in range(C): # repeat of finding neighbour for each row
