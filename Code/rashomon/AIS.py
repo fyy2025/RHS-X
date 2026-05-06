@@ -99,9 +99,9 @@ def _unit_shift_row_neighbors(row: np.ndarray, need: Optional[int] = None) -> Li
     return nbrs
 
 def profile_part_neighbors_ubs(part: ProfilePart, min_len=1) -> List[ProfilePart]:
-    '''Neighbour of a profile, iterating over all rows of B, extract neighbors of every row'''
-    if part.B is None:
-        return []
+    '''Neighbour of a profile, iterating over all rows of B, extract neighbors of every row
+    input part.B should never be None!
+    '''
     C, R = part.B.shape
     out=[]
     for r in range(C): # repeat of finding neighbour for each row
@@ -134,6 +134,8 @@ def state_neighbors_ubs(state: List[ProfilePart], min_len: int = 1) -> List[List
     neigh = []
     for p, part in enumerate(state):
         if p==0:
+            continue
+        if part.B is None:   # inactive profile — no bits to flip
             continue
         # enumerate neighbors for THIS profile
         for nb in profile_part_neighbors_ubs(part, min_len=min_len):
