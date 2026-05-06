@@ -31,7 +31,7 @@ python nhanes_mcmc_comparison.py \
     --rps_pkl     ../Results/nhanes_pruned_results_outlier.pkl \
     --ais_jsonl   ./AIS_nhanes_samples300.jsonl \
     --pb_pkl      ./PB_nhanes_steps300.pkl \
-    --out_pkl     ./nhanes_mcmc_comparison.pkl \
+    --out_dir     ./output_nhanes_mcmc \
     --mcmc_steps  50000 \
     --mcmc_burnin 20000 \
     --mcmc_thin   10 \

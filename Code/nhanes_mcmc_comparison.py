@@ -31,11 +31,13 @@ from rashomon.sets import RashomonSet
 # ---------------------------------------------------------------------------
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--data_csv",    default="../Data/NHANES_telomere.csv")
+    p.add_argument("--data_csv",    default="../Dat/NHANES_telomere.csv")
     p.add_argument("--rps_pkl",     default="../Results/nhanes_pruned_results_outlier.pkl")
     p.add_argument("--ais_jsonl",   default="./AIS_nhanes_samples300.jsonl")
     p.add_argument("--pb_pkl",      default="./PB_nhanes_steps300.pkl")
-    p.add_argument("--out_pkl",     default="./nhanes_mcmc_comparison.pkl")
+    p.add_argument("--out_dir",     default="./output_nhanes_mcmc")
+    p.add_argument("--out_pkl",     default=None,
+                   help="Override output path; defaults to <out_dir>/nhanes_mcmc_comparison.pkl")
     p.add_argument("--mcmc_steps",  type=int, default=50000)
     p.add_argument("--mcmc_burnin", type=int, default=20000)
     p.add_argument("--mcmc_thin",   type=int, default=10)
@@ -223,6 +225,8 @@ def make_score_s(D_race, y_race, policy_race, M, R, num_data, reg):
 # ---------------------------------------------------------------------------
 def main():
     args = parse_args()
+    os.makedirs(args.out_dir, exist_ok=True)
+    out_pkl = args.out_pkl or os.path.join(args.out_dir, "nhanes_mcmc_comparison.pkl")
     np.random.seed(args.seed)
 
     # --- Data ---
@@ -303,30 +307,41 @@ def main():
     result["RPS_n_states"] = len(RPS_states)
     result["RPS_ESS"] = float(1.0 / np.sum(rps_normw ** 2))
 
-    # --- MCMC ---
+    # --- MCMC (streaming — each chain writes a jsonl to out_dir) ---
     print(f"Running MCMC ({args.mcmc_chains} chains × {args.mcmc_steps} steps, "
           f"burnin={args.mcmc_burnin}, thin={args.mcmc_thin})...")
     t0 = time.time()
-    mcmc_res = MCMC.run_mcmc(
-        score_s, RPS_states, log_alpha,
-        n_chains=args.mcmc_chains,
-        steps=args.mcmc_steps,
-        burnin=args.mcmc_burnin,
-        thin=args.mcmc_thin,
-        seed=args.seed,
-        min_len=1,
-    )
+    all_samples = []
+    for c in range(args.mcmc_chains):
+        chain_jsonl    = os.path.join(args.out_dir, f"mcmc_chain_{c}.jsonl")
+        chain_progress = os.path.join(args.out_dir, f"mcmc_progress_{c}.json")
+        print(f"  Chain {c+1}/{args.mcmc_chains} -> {chain_jsonl}")
+        MCMC.run_mcmc_streaming(
+            RPS=RPS_states,
+            log_alpha=log_alpha,
+            score_s=score_s,
+            steps=args.mcmc_steps,
+            burnin=args.mcmc_burnin,
+            thin=args.mcmc_thin,
+            min_len=1,
+            seed=args.seed + c,
+            out_jsonl=chain_jsonl,
+            progress_json=chain_progress,
+        )
+        chain_res = MCMC.load_mcmc_res_from_jsonl(chain_jsonl)
+        all_samples.extend(chain_res["samples"])
+        print(f"    {len(chain_res['samples'])} samples kept")
     result["MCMC_time"] = time.time() - t0
-    n_mcmc = len(mcmc_res["samples"])
-    print(f"  Done in {result['MCMC_time']:.1f}s  |  {n_mcmc} samples")
+    n_mcmc = len(all_samples)
+    print(f"  Done in {result['MCMC_time']:.1f}s  |  {n_mcmc} total samples")
 
     mcmc_logw = np.log(np.full(n_mcmc, 1.0 / n_mcmc))
     result["MCMC_mean"] = AIS.estimate_policy_means_from_RPS(
-        mcmc_res["samples"], mcmc_logw, policies_nhanes, policy_means_nhanes,
+        all_samples, mcmc_logw, policies_nhanes, policy_means_nhanes,
         prof_idx_nhanes, R, M, lattice_edges=None,
     )
     result["MCMC_quantiles"] = AIS.states_quantiles_normal_for_all_policies(
-        mcmc_res["samples"], mcmc_logw, **normal_kw
+        all_samples, mcmc_logw, **normal_kw
     )
     result["MCMC_n_samples"] = n_mcmc
 
@@ -416,9 +431,9 @@ def main():
     print(summary.to_string())
 
     result["summary"] = summary
-    with open(args.out_pkl, "wb") as f:
+    with open(out_pkl, "wb") as f:
         pickle.dump(result, f)
-    print(f"\nSaved -> {args.out_pkl}")
+    print(f"\nSaved -> {out_pkl}")
 
 
 if __name__ == "__main__":
