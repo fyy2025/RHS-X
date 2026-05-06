@@ -176,7 +176,7 @@ def build_rps_states(R_set_2, rashomon_profiles, rashomon_homogeneous, M, R):
 def main():
     args = parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
-    rps_pkl = args.rps_pkl or os.path.join(args.out_dir, "nhanes_pruned_results_outlier.pkl")
+    rps_pkl = "../Results/nhanes_pruned_results_outlier.pkl"
     out_pkl = os.path.join(args.out_dir, f"PB_nhanes_steps{args.pb_steps}.pkl")
     np.random.seed(args.seed)
 
