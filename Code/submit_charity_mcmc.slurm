@@ -19,7 +19,7 @@ echo "Started at $(date)"
 
 cd $HOME/RHS-X/Code
 
-mkdir -p log
+mkdir -p output_charity_mcmc log
 
 source venv/bin/activate
 
