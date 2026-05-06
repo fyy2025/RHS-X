@@ -187,12 +187,14 @@ def main():
 
         # ── Exact enumeration ───────────────────────────────────────────────
         start = time.time()
-        all_partitions, losses_exact = AIS.enumerate_all_states_and_losses(
+        all_partitions, _ = AIS.enumerate_all_states_and_losses(
             profiles=profiles, R=R, M=M, policies=all_policies,
             policy_means=policy_means, prof_idx_of_policy=prof_idx_of_policy,
             D=D, y=y, reg=lamb, normalize=0, lattice_edges=None, max_states=None,
         )
-        true_log_post  = [-i[1] for i in losses_exact]
+        # Use the same g-prior score_s as MCMC/RPS/AIS/PB so all methods
+        # target the same posterior distribution.
+        true_log_post  = [math.log(max(1e-300, score_s(s))) for s in all_partitions]
         exact_post_mean = AIS.estimate_policy_means_from_RPS(
             all_partitions, true_log_post, all_policies, policy_means,
             prof_idx_of_policy, R, M, lattice_edges=None,
@@ -234,12 +236,12 @@ def main():
                 RPS_states, log_alpha, all_policies, policy_means,
                 prof_idx_of_policy, R, M, lattice_edges=None,
             )
-            result[f"RPS_{theta}_states"]    = RPS_states
-            result[f"RPS_{theta}_logw"]      = log_alpha
-            result[f"RPS_{theta}"]           = RPS_post_mean
-            result[f"RPS_{theta}_quantiles"] = AIS.states_quantiles_normal_for_all_policies(
+            result[f"RPS_{theta:g}_states"]    = RPS_states
+            result[f"RPS_{theta:g}_logw"]      = log_alpha
+            result[f"RPS_{theta:g}"]           = RPS_post_mean
+            result[f"RPS_{theta:g}_quantiles"] = AIS.states_quantiles_normal_for_all_policies(
                 RPS_states, log_alpha, **normal_kw)
-            result[f"RPS_{theta}_n_states"]  = len(RPS_states)
+            result[f"RPS_{theta:g}_n_states"]  = len(RPS_states)
 
             # -- AIS seeded from RPS --
             start   = time.time()
@@ -248,18 +250,18 @@ def main():
                 init_states=RPS_states, init_log_alpha=log_alpha,
                 R=R, eps1=eps1, eps2=eps2, score_s=score_s, cfg=cfg,
                 out_dir="./output",
-                label=f"RPS_{theta}",
+                label=f"RPS_{theta:g}",
             )
             AIS_post_mean = AIS.estimate_policy_means_from_ais(
                 ais_out=ais_out, all_policies=all_policies,
                 policy_means=policy_means, prof_idx_of_policy=prof_idx_of_policy,
                 lattice_edges=None, R_per=R, M=M,
             )
-            result[f"AIS_{theta}_output"]    = ais_out
-            result[f"AIS_{theta}"]           = AIS_post_mean
-            result[f"AIS_{theta}_quantiles"] = AIS.ais_quantiles_normal_for_all_policies(
+            result[f"AIS_{theta:g}_output"]    = ais_out
+            result[f"AIS_{theta:g}"]           = AIS_post_mean
+            result[f"AIS_{theta:g}_quantiles"] = AIS.ais_quantiles_normal_for_all_policies(
                 ais_out, **normal_kw)
-            result[f"AIS_{theta}_time"]      = time.time() - start
+            result[f"AIS_{theta:g}_time"]      = time.time() - start
 
             # -- PAC-Bayes explorer seeded from RPS --
             start = time.time()
@@ -273,19 +275,19 @@ def main():
                 pb_states, pb_log_scores, all_policies, policy_means,
                 prof_idx_of_policy, R, M, lattice_edges=None,
             )
-            result[f"PB_{theta}_states"]    = pb_states
-            result[f"PB_{theta}_logw"]      = pb_log_scores
-            result[f"PB_{theta}"]           = PB_post_mean
-            result[f"PB_{theta}_quantiles"] = AIS.states_quantiles_normal_for_all_policies(
+            result[f"PB_{theta:g}_states"]    = pb_states
+            result[f"PB_{theta:g}_logw"]      = pb_log_scores
+            result[f"PB_{theta:g}"]           = PB_post_mean
+            result[f"PB_{theta:g}_quantiles"] = AIS.states_quantiles_normal_for_all_policies(
                 pb_states, pb_log_scores, **normal_kw)
-            result[f"PB_{theta}_time"]      = time.time() - start
-            result[f"PB_{theta}_n_states"]  = len(pb_states)
-            result[f"PB_{theta}_state_fraction"] = len(pb_states) / float(n_prior)
-            result[f"PB_{theta}_bound"]     = pb_trace[-1]["bound"]
-            result[f"PB_{theta}_risk"]      = pb_trace[-1]["E_Q_risk"]
-            result[f"PB_{theta}_kl"]        = pb_trace[-1]["kl"]
-            result[f"PB_{theta}_entropy"]   = pb_trace[-1]["H_Q"]
-            result[f"PB_{theta}_trace"]     = pb_trace
+            result[f"PB_{theta:g}_time"]      = time.time() - start
+            result[f"PB_{theta:g}_n_states"]  = len(pb_states)
+            result[f"PB_{theta:g}_state_fraction"] = len(pb_states) / float(n_prior)
+            result[f"PB_{theta:g}_bound"]     = pb_trace[-1]["bound"]
+            result[f"PB_{theta:g}_risk"]      = pb_trace[-1]["E_Q_risk"]
+            result[f"PB_{theta:g}_kl"]        = pb_trace[-1]["kl"]
+            result[f"PB_{theta:g}_entropy"]   = pb_trace[-1]["H_Q"]
+            result[f"PB_{theta:g}_trace"]     = pb_trace
 
         overall_result.append(result)
 
