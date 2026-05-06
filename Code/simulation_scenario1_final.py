@@ -138,18 +138,15 @@ def main():
         prof_idx_of_policy, profiles = AIS.build_profile_index_of_policy(
             all_policies, hasse.policy_to_profile)
 
-        # ── score_s uses global_loss_raw (not Bayes loss) ──────────────────
-        def score_s(state):
-            Q = AIS.global_loss_raw(
-                state=state, D=D, y=y, M=M, R=R,
-                prof_idx_of_policy=prof_idx_of_policy,
-                policies=all_policies, policy_means=policy_means,
-                reg=lamb, normalize=0, lattice_edges=None,
-            )
-            return float(np.exp(-Q))
-
         result  = dict()
         sigma2  = AIS.compute_sigma2_saturated(D, y, all_policies)
+
+        score_s = AIS.make_score_s_gprior(
+            D=D, y=y, M=M, R=R,
+            prof_idx_of_policy=prof_idx_of_policy,
+            policies=all_policies, policy_means=policy_means,
+            g=g, sigma2=sigma2, lam=lamb,
+        )
         n_obs   = int(y.shape[0])
 
         # Shared kwargs for Normal-posterior quantile extraction
@@ -219,7 +216,7 @@ def main():
         rps_init = AIS.raggregate_to_states((R_set_init, R_profiles_init), profiles)
         log_init = [math.log(max(1e-300, score_s(s))) for s in rps_init]
         map_q = -max(log_init) if log_init else float("inf")
-        n_prior = max(len(rps_init), 1)
+        n_prior = 64
 
         result["map_q"] = map_q
         result["n_prior"] = n_prior

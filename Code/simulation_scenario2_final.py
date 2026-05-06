@@ -176,17 +176,15 @@ def main():
         prof_idx_of_policy, profiles = AIS.build_profile_index_of_policy(
             all_policies, hasse.policy_to_profile)
 
-        def score_s(state):
-            Q = AIS.global_loss_raw(
-                state=state, D=D, y=y, M=M, R=R,
-                prof_idx_of_policy=prof_idx_of_policy,
-                policies=all_policies, policy_means=policy_means,
-                reg=lamb, lattice_edges=None,
-            )
-            return float(np.exp(-Q))
-
         result  = dict()
         sigma2  = AIS.compute_sigma2_saturated(D, y, all_policies)
+
+        score_s = AIS.make_score_s_gprior(
+            D=D, y=y, M=M, R=R,
+            prof_idx_of_policy=prof_idx_of_policy,
+            policies=all_policies, policy_means=policy_means,
+            g=g, sigma2=sigma2, lam=lamb,
+        )
         n_obs   = int(y.shape[0])
 
         normal_kw = dict(

@@ -213,12 +213,10 @@ class P0BucketsWeightedS0:
     eps2: float
     S0_sigs: Set[Tuple]
     S1_sigs: Set[Tuple]
-    S1_map: Dict[Tuple, State]          # optional: sig -> concrete neighbor (used if sampling S1)
+    S1_map: Dict[Tuple, State]          # sig -> concrete neighbor (used when sampling S1)
     size_S1: int
-    size_Sgt1: int
-    S0_logprob: Dict[Tuple, float]      # NEW: per-RPS state log prob ∝ exp(log_alpha)
+    S0_logprob: Dict[Tuple, float]      # per-RPS state log prob ∝ exp(log_alpha)
 
-# count the size of 1-edit, whole model space, to get prob for warm start proposal
 def make_p0_buckets_weighted_S0(RPS: List[State],
                                 R_per: np.ndarray,
                                 log_alpha: List[float],
@@ -227,8 +225,7 @@ def make_p0_buckets_weighted_S0(RPS: List[State],
                                 min_len: int = 1) -> P0BucketsWeightedS0:
     # S0: RPS signatures
     S0_sigs = [state_signature(s) for s in RPS]
-    # normalize weights inside S0 using your existing log_alpha
-    p_rps = _softmax_logalpha(log_alpha)                            # CHANGED: reuse log_alpha
+    p_rps = _softmax_logalpha(log_alpha)
     S0_logprob = {sig: math.log(p_rps[i]) for i, sig in enumerate(S0_sigs)}
 
     # S1: union of 1-edit neighbors (unique), excluding S0
@@ -241,28 +238,23 @@ def make_p0_buckets_weighted_S0(RPS: List[State],
             if sig in S0_set or sig in S1_sigs: continue
             S1_sigs.add(sig); S1_map[sig] = n
 
-    size_Omega = _total_space_size(RPS[0], np.asarray(R_per, int))
-    size_S1 = len(S1_sigs)
-    size_Sgt1 = max(0, size_Omega - len(S0_sigs) - size_S1)
-
     return P0BucketsWeightedS0(
         eps1=eps1, eps2=eps2,
         S0_sigs=set(S0_sigs),
         S1_sigs=S1_sigs, S1_map=S1_map,
-        size_S1=size_S1, size_Sgt1=size_Sgt1,
+        size_S1=len(S1_sigs),
         S0_logprob=S0_logprob
     )
 
 def log_p0_distance_weighted_S0(x: State, buckets: P0BucketsWeightedS0) -> float:
     sig = state_signature(x)
-    if sig in buckets.S0_sigs: # sum of prob for all states within RPS equals eps1
-        # mass eps1 distributed by alpha within S0  (not uniform)
-        return math.log(buckets.eps1) + buckets.S0_logprob[sig]      # CHANGED: weighted by log_alpha
-    if sig in buckets.S1_sigs: # sum of prob for all states within 1-edit neighborhood equals eps2-eps1
+    if sig in buckets.S0_sigs:
+        return math.log(buckets.eps1) + buckets.S0_logprob[sig]
+    if sig in buckets.S1_sigs:
         if buckets.size_S1 == 0: return float("-inf")
         return math.log(buckets.eps2 - buckets.eps1) - math.log(buckets.size_S1)
-    if buckets.size_Sgt1 == 0: return float("-inf") # sum of prob for all other states equals 1-eps2
-    return math.log(1.0 - buckets.eps2) - math.log(buckets.size_Sgt1)
+    # beyond S1: uniform draw, all such states share the same log_p0
+    return math.log(1.0 - buckets.eps2)
 
 def _editable_indices(pp, R_per: np.ndarray) -> List[Tuple[int,int]]:
     """
@@ -338,23 +330,38 @@ def random_state_jitter_from_RPS(RPS: List[State], R_per: np.ndarray, k_flips: i
         x[p] = type(x[p])(cov_ids=x[p].cov_ids, B=B)
     return x
 
+def random_state_uniform(template: State, R_per: np.ndarray) -> State:
+    """Generate a uniformly random state by independently randomising every interior bit."""
+    out = _copy_state(template)
+    R_per = np.asarray(R_per, int)
+    C_per = np.maximum(R_per - 2, 0)
+    for p, pp in enumerate(out):
+        if pp.B is None or pp.cov_ids is None:
+            continue
+        B = np.asarray(pp.B, float).copy()
+        cov = np.asarray(pp.cov_ids, int)
+        r = 0
+        for m in range(len(cov)):
+            if cov[m] != 1:
+                continue
+            need = int(C_per[m])
+            if need > 0 and r < B.shape[0]:
+                for j in range(min(need, B.shape[1])):
+                    if not np.isinf(B[r, j]):
+                        B[r, j] = float(random.randint(0, 1))
+            r += 1
+        out[p] = ProfilePart(cov_ids=pp.cov_ids, B=B)
+    return out
+
 def sample_p0(buckets: P0BucketsWeightedS0, RPS: List[State], R_per: np.ndarray) -> State:
     rng = np.random.default_rng()
     rn = rng.random()
     s = _copy_state(random.choice(RPS))
     if rn > buckets.eps2:
-        beyond = False
-        while beyond == False:
-            s = _copy_state(random_state_jitter_from_RPS(RPS, R_per, 3))
-            sig = state_signature(s)
-            if sig in buckets.S0_sigs or sig in buckets.S1_sigs: 
-                continue
-            else:
-                beyond = True
+        s = random_state_uniform(RPS[0], R_per)
     elif rn >= buckets.eps1:
         sig = random.choice(tuple(buckets.S1_sigs))
         s = _copy_state(buckets.S1_map[sig])
-
     return s
 
 
@@ -1125,6 +1132,74 @@ def score_s_expneg_raw(state, D, y, M, R, prof_idx_of_policy, all_policies, poli
         lattice_edges=None,
     )
     return float(np.exp(-Q))
+
+
+def _profile_sse_and_pools(D_k, y_k, Sigma_k, policies_k, pm_k, lattice_edges=None):
+    """Return (SSE, num_pools) for a single profile."""
+    from rashomon import extract_pools as _ep
+    pi_pools, pi_policies = _ep.extract_pools(policies_k, Sigma_k, lattice_edges)
+    mu_pools = loss.compute_pool_means(pm_k, pi_pools)
+    D_local = np.asarray(D_k)[:, 0].astype(int)
+    y_obs = np.asarray(y_k).ravel()
+    pool_of_obs = np.array([pi_policies[d] for d in D_local])
+    sse = float(np.sum((y_obs - mu_pools[pool_of_obs]) ** 2))
+    return sse, len(pi_pools)
+
+
+def global_sse_and_pools(state, D, y, policies, prof_idx_of_policy, M, R, lattice_edges=None):
+    """Compute total SSE_Π and total number of pools |Π| across all profiles."""
+    D_arr = np.asarray(D); y_arr = np.asarray(y)
+    if D_arr.ndim == 1: D_arr = D_arr.reshape(-1, 1)
+    if y_arr.ndim == 1: y_arr = y_arr.reshape(-1, 1)
+    R = np.asarray(R, dtype=int)
+    C = max(1, int(np.maximum(R - 2, 0).max()))
+    num_profiles = len(state)
+    num_policies = len(policies)
+    pol_ids_by_profile = [np.where(prof_idx_of_policy == k)[0] for k in range(num_profiles)]
+    pid_global = D_arr[:, 0].astype(int)
+    total_sse = 0.0
+    total_pools = 0
+    for k in range(num_profiles):
+        pol_ids = pol_ids_by_profile[k]
+        mask = np.isin(pid_global, pol_ids)
+        if not np.any(mask):
+            continue
+        D_k = D_arr[mask].copy(); y_k = y_arr[mask].copy()
+        local_map = -np.ones(num_policies, dtype=int)
+        local_map[pol_ids] = np.arange(pol_ids.size, dtype=int)
+        D_k[:, 0] = local_map[D_k[:, 0].astype(int)]
+        policies_k = [policies[int(i)] for i in pol_ids]
+        pm_k = loss.compute_policy_means(D_k, y_k, len(policies_k))
+        Sigma_k = assemble_sigma_full_for_profile(state[k], M, R)
+        if Sigma_k is None:
+            Sigma_k = np.full((M, C), np.inf, dtype=float)
+        sse_k, pools_k = _profile_sse_and_pools(D_k, y_k, Sigma_k, policies_k, pm_k, lattice_edges)
+        total_sse += sse_k
+        total_pools += pools_k
+    return total_sse, total_pools
+
+
+def score_s_gprior(state, D, y, M, R, prof_idx_of_policy, all_policies, policy_means,
+                   g: float, sigma2: float, lam: float, lattice_edges=None):
+    """
+    Posterior score using g-prior formula:
+      p(Π|D) ∝ exp{ -g/(2σ²(1+g)) · SSE_Π  -  (λ + ½log(1+g)) · |Π| }
+    """
+    sse, n_pools = global_sse_and_pools(
+        state, D, y, all_policies, prof_idx_of_policy, M, R, lattice_edges)
+    log_score = (-g / (2.0 * sigma2 * (1.0 + g)) * sse
+                 - (lam + 0.5 * math.log(1.0 + g)) * n_pools)
+    return float(math.exp(max(log_score, -700.0)))
+
+
+def make_score_s_gprior(*, D, y, M, R, prof_idx_of_policy, policies, policy_means,
+                        g: float, sigma2: float, lam: float, lattice_edges=None):
+    """Factory: returns score_s(state) -> float using the g-prior posterior."""
+    def score_s(state):
+        return score_s_gprior(state, D, y, M, R, prof_idx_of_policy, policies,
+                               policy_means, g=g, sigma2=sigma2, lam=lam,
+                               lattice_edges=lattice_edges)
+    return score_s
 
 def parallel_ais(
     out_jsonl: str,
