@@ -27,12 +27,20 @@ echo "Using python: $(which python)"
 python --version
 
 python nhanes_mcmc_comparison.py \
-    --data_csv    ../Dat/NHANES_telomere.csv \
-    --out_dir     ./output_nhanes_mcmc \
-    --mcmc_steps  50000 \
-    --mcmc_burnin 20000 \
-    --mcmc_thin   10 \
-    --mcmc_chains 8 \
-    --seed        42
+    --data_csv            ../Dat/NHANES_telomere.csv \
+    --out_dir             ./output_nhanes_mcmc \
+    --mcmc_steps          50000 \
+    --mcmc_burnin         20000 \
+    --mcmc_thin           10 \
+    --mcmc_chains         1 \
+    --ais_n_paths         300 \
+    --ais_n_levels        20 \
+    --ais_moves_per_level 5 \
+    --ais_eps1            0.5 \
+    --ais_eps2            0.75 \
+    --pb_steps            300 \
+    --pb_delta            0.05 \
+    --pb_frontier_cap     500 \
+    --seed                42
 
 echo "Job $SLURM_JOB_ID finished at $(date)."

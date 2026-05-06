@@ -2,14 +2,15 @@
 Charitable donations MCMC ground-truth comparison.
 
 Mirrors real_data_charitable_donations.ipynb cells 0–75.
-Runs RAggregate, then streaming MCMC as ground truth, loads AIS/PB if
-available, and saves a comparison table to --out_dir.
+Runs RAggregate, then streaming MCMC as ground truth, runs AIS and PB,
+and saves a comparison table to --out_dir.
 """
 import argparse
 import math
 import os
 import pickle
 import time
+from functools import partial
 
 import numpy as np
 import pandas as pd
@@ -20,19 +21,24 @@ from rashomon.aggregate import RAggregate
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--data_dta",    default="../Dat/Does_Price_Matter_AER_merged.dta",
-                   help="Path to Does_Price_Matter_AER_merged.dta")
-    p.add_argument("--out_dir",     default="./output_charity_mcmc",
-                   help="All outputs (and default input lookups) go here")
-    p.add_argument("--ais_jsonl",   default=None,
-                   help="charity_ais.jsonl (default: <out_dir>/charity_ais.jsonl)")
-    p.add_argument("--pb_pkl",      default=None,
-                   help="charity_pb.pkl (default: <out_dir>/charity_pb.pkl)")
-    p.add_argument("--mcmc_steps",  type=int, default=50000)
-    p.add_argument("--mcmc_burnin", type=int, default=20000)
-    p.add_argument("--mcmc_thin",   type=int, default=10)
-    p.add_argument("--mcmc_chains", type=int, default=8)
-    p.add_argument("--seed",        type=int, default=42)
+    p.add_argument("--data_dta",            default="../Dat/Does_Price_Matter_AER_merged.dta")
+    p.add_argument("--out_dir",             default="./output_charity_mcmc")
+    # MCMC
+    p.add_argument("--mcmc_steps",          type=int,   default=50000)
+    p.add_argument("--mcmc_burnin",         type=int,   default=20000)
+    p.add_argument("--mcmc_thin",           type=int,   default=10)
+    p.add_argument("--mcmc_chains",         type=int,   default=1)
+    # AIS
+    p.add_argument("--ais_n_paths",         type=int,   default=300)
+    p.add_argument("--ais_n_levels",        type=int,   default=20)
+    p.add_argument("--ais_moves_per_level", type=int,   default=5)
+    p.add_argument("--ais_eps1",            type=float, default=0.5)
+    p.add_argument("--ais_eps2",            type=float, default=0.75)
+    # PB
+    p.add_argument("--pb_steps",            type=int,   default=300)
+    p.add_argument("--pb_delta",            type=float, default=0.05)
+    p.add_argument("--pb_frontier_cap",     type=int,   default=500)
+    p.add_argument("--seed",                type=int,   default=42)
     return p.parse_args()
 
 
@@ -68,9 +74,7 @@ def load_data(dta_path):
 def main():
     args = parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
-    ais_jsonl = args.ais_jsonl or os.path.join(args.out_dir, "charity_ais.jsonl")
-    pb_pkl    = args.pb_pkl    or os.path.join(args.out_dir, "charity_pb.pkl")
-    out_pkl   = os.path.join(args.out_dir, "charity_mcmc_comparison.pkl")
+    out_pkl = os.path.join(args.out_dir, "charity_mcmc_comparison.pkl")
     np.random.seed(args.seed)
 
     # --- Data ---
@@ -186,55 +190,100 @@ def main():
     result["MCMC_n_samples"] = n_mcmc
 
     # --- AIS ---
-    if os.path.exists(ais_jsonl):
-        print(f"Loading AIS from {ais_jsonl}...")
-        _r = AIS.load_ais_from_jsonl(ais_jsonl)
-        ais_logw  = np.asarray(_r["logw"], float)
-        ais_normw = np.exp(ais_logw - np.max(ais_logw))
-        ais_normw /= ais_normw.sum()
-        ais_out = AIS.AISOutput(
-            terminals=_r["terminals"], logw=ais_logw, normw=ais_normw, ladder=None
-        )
-        result["AIS_mean"] = AIS.estimate_policy_means_from_ais(
-            ais_out=ais_out, all_policies=all_policies,
-            policy_means=policy_means,
-            prof_idx_of_policy=prof_idx_of_policy,
-            lattice_edges=None, R_per=R, M=M,
-        )
-        result["AIS_quantiles"] = AIS.ais_quantiles_normal_for_all_policies(
-            ais_out, **normal_kw
-        )
-        result["AIS_n_states"] = len(ais_out.terminals)
-        result["AIS_ESS"]      = float(1.0 / np.sum(ais_normw ** 2))
-        print(f"  AIS: {len(ais_out.terminals)} terminals, ESS={result['AIS_ESS']:.1f}")
-    else:
-        print(f"  WARNING: {ais_jsonl} not found, skipping AIS.")
+    print(f"Running AIS ({args.ais_n_paths} paths, eps1={args.ais_eps1}, eps2={args.ais_eps2})...")
+    t0 = time.time()
+    cfg = AIS.AISConfig(
+        n_paths=args.ais_n_paths,
+        n_levels=args.ais_n_levels,
+        moves_per_level=args.ais_moves_per_level,
+        min_len=1,
+        seed=args.seed,
+    )
+    buckets = AIS.make_p0_buckets_weighted_S0(
+        RPS_states, np.asarray(R, int), log_alpha,
+        eps1=args.ais_eps1, eps2=args.ais_eps2, min_len=1,
+    )
+    log_p0 = partial(AIS.log_p0_distance_weighted_S0_wrapper, buckets=buckets)
+    init_sampler = partial(
+        AIS.init_from_RPS_batch_wrapper,
+        RPS_states=RPS_states,
+        log_alpha=log_alpha,
+        rng_seed=args.seed,
+    )
+    ladder, _ = AIS.pilot_adaptive_ladder(
+        init_sampler=init_sampler,
+        log_p0=log_p0,
+        score_s=score_s,
+        N=512,
+        ess_target=0.80,
+        beta0=0.0, beta1=1.0,
+        initial_delta=0.05,
+        min_delta=1e-3,
+        moves_per_probe=3,
+        min_len=1,
+        rng_seed=args.seed,
+    )
+    ais_jsonl = os.path.join(args.out_dir, f"charity_ais_{args.ais_n_paths}.jsonl")
+    ais_out = AIS.run_ais_state_streaming(
+        buckets=buckets,
+        anchors=RPS_states,
+        score_s=score_s,
+        cfg=cfg,
+        RPS=RPS_states,
+        R_per=np.asarray(R, int),
+        eps1=args.ais_eps1,
+        eps2=args.ais_eps2,
+        out_jsonl=ais_jsonl,
+        ladder=ladder,
+    )
+    ais_normw = np.asarray(ais_out.normw, float)
+    result["AIS_mean"] = AIS.estimate_policy_means_from_ais(
+        ais_out=ais_out, all_policies=all_policies,
+        policy_means=policy_means,
+        prof_idx_of_policy=prof_idx_of_policy,
+        lattice_edges=None, R_per=R, M=M,
+    )
+    result["AIS_quantiles"] = AIS.ais_quantiles_normal_for_all_policies(ais_out, **normal_kw)
+    result["AIS_n_states"]  = len(ais_out.terminals)
+    result["AIS_ESS"]       = float(1.0 / np.sum(ais_normw ** 2))
+    result["AIS_time"]      = time.time() - t0
+    print(f"  AIS: {result['AIS_n_states']} terminals, ESS={result['AIS_ESS']:.1f}, "
+          f"time={result['AIS_time']:.1f}s")
 
     # --- PB ---
-    if os.path.exists(pb_pkl):
-        print(f"Loading PB from {pb_pkl}...")
-        with open(pb_pkl, "rb") as f:
-            pb_data = pickle.load(f)
-        pb_states = pb_data["pb_states"]
-        pb_logw   = np.asarray(pb_data["pb_log_scores"], float)
-        pb_normw  = np.exp(pb_logw - np.max(pb_logw))
-        pb_normw /= pb_normw.sum()
-        pb_out = AIS.AISOutput(
-            terminals=pb_states, logw=pb_logw, normw=pb_normw, ladder=None
-        )
-        result["PB_mean"] = AIS.estimate_policy_means_from_RPS(
-            pb_states, pb_logw, all_policies, policy_means,
-            prof_idx_of_policy, R, M, lattice_edges=None,
-        )
-        result["PB_quantiles"] = AIS.ais_quantiles_normal_for_all_policies(
-            pb_out, **normal_kw
-        )
-        result["PB_n_states"] = len(pb_states)
-        result["PB_ESS"]      = float(1.0 / np.sum(pb_normw ** 2))
-        result["PB_time"]     = pb_data.get("pb_time", float("nan"))
-        print(f"  PB: {len(pb_states)} states, ESS={result['PB_ESS']:.1f}")
-    else:
-        print(f"  WARNING: {pb_pkl} not found, skipping PB.")
+    print(f"Running PB ({args.pb_steps} steps)...")
+    t0 = time.time()
+    n_obs   = int(y.shape[0])
+    n_prior = AIS._total_space_size(RPS_states[0], np.asarray(R, int)) if len(RPS_states) else 1
+    pb_states, pb_log_scores, pb_trace = AIS.run_pac_bayes_explorer(
+        init_states=RPS_states,
+        init_log_scores=log_alpha,
+        score_s=score_s,
+        n_obs=n_obs,
+        n_prior=n_prior,
+        n_steps=args.pb_steps,
+        delta=args.pb_delta,
+        min_len=1,
+        frontier_cap=args.pb_frontier_cap,
+        seed=args.seed,
+    )
+    pb_normw = np.exp(np.asarray(pb_log_scores, float) - np.max(pb_log_scores))
+    pb_normw /= pb_normw.sum()
+    pb_out = AIS.AISOutput(terminals=pb_states, logw=pb_log_scores, normw=pb_normw, ladder=None)
+    result["PB_mean"] = AIS.estimate_policy_means_from_RPS(
+        pb_states, pb_log_scores, all_policies, policy_means,
+        prof_idx_of_policy, R, M, lattice_edges=None,
+    )
+    result["PB_quantiles"] = AIS.ais_quantiles_normal_for_all_policies(pb_out, **normal_kw)
+    result["PB_n_states"]  = len(pb_states)
+    result["PB_ESS"]       = float(1.0 / np.sum(pb_normw ** 2))
+    result["PB_time"]      = time.time() - t0
+    pb_save = os.path.join(args.out_dir, f"charity_pb_{args.pb_steps}.pkl")
+    with open(pb_save, "wb") as f:
+        pickle.dump({"pb_states": pb_states, "pb_log_scores": pb_log_scores,
+                     "pb_trace": pb_trace, "pb_time": result["PB_time"]}, f)
+    print(f"  PB: {result['PB_n_states']} states, ESS={result['PB_ESS']:.1f}, "
+          f"time={result['PB_time']:.1f}s")
 
     # --- Summary table ---
     mc_lo = result["MCMC_quantiles"]["0.025"]
