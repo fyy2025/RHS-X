@@ -31,13 +31,16 @@ from rashomon.sets import RashomonSet
 # ---------------------------------------------------------------------------
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--data_csv",    default="../Dat/NHANES_telomere.csv")
-    p.add_argument("--rps_pkl",     default="../Results/nhanes_pruned_results_outlier.pkl")
-    p.add_argument("--ais_jsonl",   default="./AIS_nhanes_samples300.jsonl")
-    p.add_argument("--pb_pkl",      default="./PB_nhanes_steps300.pkl")
-    p.add_argument("--out_dir",     default="./output_nhanes_mcmc")
-    p.add_argument("--out_pkl",     default=None,
-                   help="Override output path; defaults to <out_dir>/nhanes_mcmc_comparison.pkl")
+    p.add_argument("--data_csv",    default="../Data/NHANES_telomere.csv",
+                   help="Path to NHANES_telomere.csv")
+    p.add_argument("--out_dir",     default="./output_nhanes_mcmc",
+                   help="All outputs (and default input lookups) go here")
+    p.add_argument("--rps_pkl",     default=None,
+                   help="nhanes_pruned_results_outlier.pkl (default: <out_dir>/nhanes_pruned_results_outlier.pkl)")
+    p.add_argument("--ais_jsonl",   default=None,
+                   help="AIS_nhanes_samples300.jsonl (default: <out_dir>/AIS_nhanes_samples300.jsonl)")
+    p.add_argument("--pb_pkl",      default=None,
+                   help="PB_nhanes_steps300.pkl (default: <out_dir>/PB_nhanes_steps300.pkl)")
     p.add_argument("--mcmc_steps",  type=int, default=50000)
     p.add_argument("--mcmc_burnin", type=int, default=20000)
     p.add_argument("--mcmc_thin",   type=int, default=10)
@@ -226,7 +229,10 @@ def make_score_s(D_race, y_race, policy_race, M, R, num_data, reg):
 def main():
     args = parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
-    out_pkl = args.out_pkl or os.path.join(args.out_dir, "nhanes_mcmc_comparison.pkl")
+    rps_pkl   = args.rps_pkl   or os.path.join(args.out_dir, "nhanes_pruned_results_outlier.pkl")
+    ais_jsonl = args.ais_jsonl or os.path.join(args.out_dir, "AIS_nhanes_samples300.jsonl")
+    pb_pkl    = args.pb_pkl    or os.path.join(args.out_dir, "PB_nhanes_steps300.pkl")
+    out_pkl   = os.path.join(args.out_dir, "nhanes_mcmc_comparison.pkl")
     np.random.seed(args.seed)
 
     # --- Data ---
@@ -258,8 +264,8 @@ def main():
      _) = setup_race_data(X, y, Z, all_policies, policy_race, policy_race_idx, M)
 
     # --- Load pruned RPS pickle ---
-    print(f"Loading RPS pickle from {args.rps_pkl}...")
-    with open(args.rps_pkl, "rb") as f:
+    print(f"Loading RPS pickle from {rps_pkl}...")
+    with open(rps_pkl, "rb") as f:
         rps_data = pickle.load(f)
     R_set_2 = rps_data["R_set"]
     model_losses_2 = np.asarray(rps_data["losses"], float)
@@ -346,9 +352,9 @@ def main():
     result["MCMC_n_samples"] = n_mcmc
 
     # --- AIS ---
-    if os.path.exists(args.ais_jsonl):
-        print(f"Loading AIS from {args.ais_jsonl}...")
-        _r = AIS.load_ais_from_jsonl(args.ais_jsonl)
+    if os.path.exists(ais_jsonl):
+        print(f"Loading AIS from {ais_jsonl}...")
+        _r = AIS.load_ais_from_jsonl(ais_jsonl)
         ais_logw = np.asarray(_r["logw"], float)
         ais_normw = np.exp(ais_logw - np.max(ais_logw))
         ais_normw /= ais_normw.sum()
@@ -368,12 +374,12 @@ def main():
         result["AIS_ESS"] = float(1.0 / np.sum(ais_normw ** 2))
         print(f"  AIS: {len(ais_out.terminals)} terminals, ESS={result['AIS_ESS']:.1f}")
     else:
-        print(f"  WARNING: {args.ais_jsonl} not found, skipping AIS.")
+        print(f"  WARNING: {ais_jsonl} not found, skipping AIS.")
 
     # --- PB ---
-    if os.path.exists(args.pb_pkl):
-        print(f"Loading PB from {args.pb_pkl}...")
-        with open(args.pb_pkl, "rb") as f:
+    if os.path.exists(pb_pkl):
+        print(f"Loading PB from {pb_pkl}...")
+        with open(pb_pkl, "rb") as f:
             pb_data = pickle.load(f)
         pb_states  = pb_data["pb_states"]
         pb_logw    = np.asarray(pb_data["pb_log_scores"], float)
@@ -390,7 +396,7 @@ def main():
         result["PB_time"] = pb_data.get("pb_time", float("nan"))
         print(f"  PB: {len(pb_states)} states, ESS={result['PB_ESS']:.1f}")
     else:
-        print(f"  WARNING: {args.pb_pkl} not found, skipping PB.")
+        print(f"  WARNING: {pb_pkl} not found, skipping PB.")
 
     # --- Summary table ---
     mc_lo = result["MCMC_quantiles"]["0.025"]

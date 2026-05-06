@@ -19,7 +19,7 @@ echo "Started at $(date)"
 
 cd $HOME/RHS-X/Code
 
-mkdir -p output_nhanes_mcmc log
+mkdir -p log
 
 source venv/bin/activate
 
@@ -28,9 +28,6 @@ python --version
 
 python nhanes_mcmc_comparison.py \
     --data_csv    ../Data/NHANES_telomere.csv \
-    --rps_pkl     ../Results/nhanes_pruned_results_outlier.pkl \
-    --ais_jsonl   ./AIS_nhanes_samples300.jsonl \
-    --pb_pkl      ./PB_nhanes_steps300.pkl \
     --out_dir     ./output_nhanes_mcmc \
     --mcmc_steps  50000 \
     --mcmc_burnin 20000 \
