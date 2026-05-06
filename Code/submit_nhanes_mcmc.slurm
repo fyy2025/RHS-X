@@ -1,0 +1,41 @@
+#!/bin/bash
+
+#SBATCH --job-name=nhanes_mcmc
+#SBATCH --account=escience
+#SBATCH --partition=cpu-g2-mem2x
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --mem=32G
+#SBATCH --time=24:00:00
+#SBATCH --output=log/%x_%j.out
+#SBATCH --error=log/%x_%j.err
+#SBATCH --mail-type=FAIL,KILL,END
+#SBATCH --mail-user=fyy2030@uw.edu
+
+set -euo pipefail
+
+echo "Running on $(hostname)"
+echo "Started at $(date)"
+
+cd $HOME/RHS-X/Code
+
+mkdir -p log
+
+source venv/bin/activate
+
+echo "Using python: $(which python)"
+python --version
+
+python nhanes_mcmc_comparison.py \
+    --data_csv    ../Data/NHANES_telomere.csv \
+    --rps_pkl     ../Results/nhanes_pruned_results_outlier.pkl \
+    --ais_jsonl   ./AIS_nhanes_samples300.jsonl \
+    --pb_pkl      ./PB_nhanes_steps300.pkl \
+    --out_pkl     ./nhanes_mcmc_comparison.pkl \
+    --mcmc_steps  50000 \
+    --mcmc_burnin 20000 \
+    --mcmc_thin   10 \
+    --mcmc_chains 8 \
+    --seed        42
+
+echo "Job $SLURM_JOB_ID finished at $(date)."
