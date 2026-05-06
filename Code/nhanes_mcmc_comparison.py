@@ -35,8 +35,8 @@ def parse_args():
                    help="Path to NHANES_telomere.csv")
     p.add_argument("--out_dir",     default="./output_nhanes_mcmc",
                    help="All outputs (and default input lookups) go here")
-    p.add_argument("--rps_pkl",     default=None,
-                   help="nhanes_pruned_results_outlier.pkl (default: <out_dir>/nhanes_pruned_results_outlier.pkl)")
+    p.add_argument("--rps_pkl",     default="../Results/nhanes_pruned_results_outlier.pkl",
+                   help="Pre-computed RPS pickle")
     p.add_argument("--ais_jsonl",   default=None,
                    help="AIS_nhanes_samples300.jsonl (default: <out_dir>/AIS_nhanes_samples300.jsonl)")
     p.add_argument("--pb_pkl",      default=None,
@@ -159,14 +159,19 @@ def enumerate_rashomon(D_race, y_race, policy_means_race, D_remapped, y,
         rashomon_profiles.append(rk)
         print(f"  Race {race}: {len(rk)} partitions")
 
+    pm_hom = loss.compute_policy_means(D_remapped, y, n_per_race)
+    nodata_h = np.where(pm_hom[:, 1] == 0)[0]
+    pm_hom[nodata_h, 0] = -np.inf
+    pm_hom[nodata_h, 1] = 1
+
     rashomon_homogeneous = RAggregate_profile(
         M, R, H, D_remapped, y, theta,
         all_active_profile, reg,
-        policies_masked, policy_means_race[1],
+        policies_masked, pm_hom,
         normalize=num_data,
     )
     rashomon_homogeneous.calculate_loss(
-        D_remapped, y, policies_masked, policy_means_race[1], reg, normalize=num_data
+        D_remapped, y, policies_masked, pm_hom, reg, normalize=num_data
     )
     print(f"  Homogeneous: {len(rashomon_homogeneous)} partitions")
 
@@ -229,7 +234,7 @@ def make_score_s(D_race, y_race, policy_race, M, R, num_data, reg):
 def main():
     args = parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
-    rps_pkl   = args.rps_pkl   or os.path.join(args.out_dir, "nhanes_pruned_results_outlier.pkl")
+    rps_pkl   = args.rps_pkl
     ais_jsonl = args.ais_jsonl or os.path.join(args.out_dir, "AIS_nhanes_samples300.jsonl")
     pb_pkl    = args.pb_pkl    or os.path.join(args.out_dir, "PB_nhanes_steps300.pkl")
     out_pkl   = os.path.join(args.out_dir, "nhanes_mcmc_comparison.pkl")
