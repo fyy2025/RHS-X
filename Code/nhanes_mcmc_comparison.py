@@ -407,7 +407,7 @@ def main():
     print(f"Running PB ({args.pb_steps} steps)...")
     t0 = time.time()
     n_obs   = int(y.shape[0])
-    n_prior = AIS._total_space_size(RPS_states[0], np.asarray(R, int)) if len(RPS_states) else 1
+    n_prior = float(AIS._total_space_size(RPS_states[0], np.asarray(R, int)) if len(RPS_states) else 1)
     pb_states, pb_log_scores, pb_trace = AIS.run_pac_bayes_explorer(
         init_states=RPS_states,
         init_log_scores=log_alpha,
