@@ -29,15 +29,15 @@ python --version
 python charity_mcmc_comparison.py \
     --data_dta            ../Dat/Does_Price_Matter_AER_merged.dta \
     --out_dir             ./output_charity_mcmc \
-    --mcmc_steps          50000 \
+    --mcmc_steps          100000 \
     --mcmc_burnin         20000 \
     --mcmc_thin           10 \
     --mcmc_chains         1 \
     --ais_n_paths         300 \
     --ais_n_levels        20 \
     --ais_moves_per_level 5 \
-    --ais_eps1            0.5 \
-    --ais_eps2            0.75 \
+    --ais_eps1            0.3 \
+    --ais_eps2            0.55 \
     --pb_steps            300 \
     --pb_delta            0.05 \
     --pb_frontier_cap     500 \
