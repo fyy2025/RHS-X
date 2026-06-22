@@ -812,9 +812,11 @@ def make_ladder(K:int, gamma:float=4.0) -> np.ndarray:
 
 def mh_step_state_uniform_neighbors(x: State, t: float,
                                     log_p0: Callable[[State], float],
-                                    score_s: Callable[[State], float],
+                                    log_score_s: Callable[[State], float],
                                     min_len:int=1) -> State:
-    """One step of MH used in each temperature step of the AIS, with the uniform neighborhood proposal"""
+    """One step of MH used in each temperature step of the AIS, with the uniform neighborhood proposal.
+    log_score_s: callable returning log-posterior score (log-space, no clamp).
+    """
     N_cur = [n for n in state_neighbors_ubs(x, min_len=min_len) if not states_equal(n, x)]
     if not N_cur: return x
     prop = random.choice(N_cur)
@@ -822,10 +824,10 @@ def mh_step_state_uniform_neighbors(x: State, t: float,
     def logpi_t(z: State) -> float:
         lq = log_p0(z)
         if lq==float("-inf"): return float("-inf")
-        return (1.0 - t)*lq + t*math.log(max(1e-300, score_s(z))) # target dist determined by t
+        return (1.0 - t)*lq + t*log_score_s(z)
     lcur, lprop = logpi_t(x), logpi_t(prop)
     if lprop == float("-inf"): return x
-    logr = (lprop-lcur) + math.log(max(1,len(N_cur))) - math.log(max(1,len(N_prop))) # matropolis hasting
+    logr = (lprop-lcur) + math.log(max(1,len(N_cur))) - math.log(max(1,len(N_prop)))
     if math.log(random.random()+1e-300) < min(0.0, logr): return prop
     return x
 
@@ -920,7 +922,7 @@ def append_jsonl(path: str, record: Dict[str, Any]) -> None:
 def run_ais_state_streaming(
     buckets,
     anchors: List[State],
-    score_s: Callable[[State], float],
+    score_s: Callable[[State], float] = None,
     cfg: AISConfig = AISConfig(),
     RPS: Optional[List[State]] = None,
     R_per: Optional[np.ndarray] = None,
@@ -928,13 +930,18 @@ def run_ais_state_streaming(
     out_jsonl: str = "AIS_samples.jsonl",
     ladder: Optional[List[State]] = None,
     tau_init: float = 1.0,
-    keep_in_memory: bool = True
+    keep_in_memory: bool = True,
+    log_score_s: Callable[[State], float] = None,
 ) -> Dict[str, List[Any]]:
 
     if RPS is None or R_per is None:
         raise ValueError("Provide RPS and R_per for the distance-bucket p0.")
+    if log_score_s is None and score_s is None:
+        raise ValueError("Provide log_score_s (preferred) or score_s.")
+    if log_score_s is None:
+        log_score_s = lambda z: math.log(max(1e-300, score_s(z)))
     buckets = buckets
-    log_p0 = lambda z: log_p0_distance_weighted_S0(z, buckets)     
+    log_p0 = lambda z: log_p0_distance_weighted_S0(z, buckets)
 
     ladder = ladder
 
@@ -953,12 +960,11 @@ def run_ais_state_streaming(
             for beta_cur in ladder[1:]:
                 # AIS weight increment
                 lq = log_p0(x)
-                lp = math.log(max(1e-300, score_s(x)))
-                lw += (beta_cur - beta_prev) * (lp - lq) # move to next ladder, update weight
+                lp = log_score_s(x)
+                lw += (beta_cur - beta_prev) * (lp - lq)
                 # MH moves at level beta_cur
                 for _ in range(cfg.moves_per_level):
-                    x = mh_step_state_uniform_neighbors(x, beta_cur, log_p0, score_s, min_len=cfg.min_len)
-                    # proposal step, moves_per_level steps of MH movements
+                    x = mh_step_state_uniform_neighbors(x, beta_cur, log_p0, log_score_s, min_len=cfg.min_len)
                 beta_prev = beta_cur
 
             rec = {
@@ -1206,6 +1212,28 @@ def make_score_s_gprior(*, D, y, M, R, prof_idx_of_policy, policies, policy_mean
                                policy_means, g=g, sigma2=sigma2, lam=lam,
                                lattice_edges=lattice_edges)
     return score_s
+
+
+def log_score_s_gprior(state, D, y, M, R, prof_idx_of_policy, all_policies, policy_means,
+                       g: float, sigma2: float, lam: float, lattice_edges=None):
+    """
+    Log-posterior score using g-prior formula (no exp, no clamp):
+      log p(Π|D) = -g/(2σ²(1+g)) · SSE_Π  -  (λ + ½log(1+g)) · |Π|
+    """
+    sse, n_pools = global_sse_and_pools(
+        state, D, y, all_policies, prof_idx_of_policy, M, R, lattice_edges)
+    return float(-g / (2.0 * sigma2 * (1.0 + g)) * sse
+                 - (lam + 0.5 * math.log(1.0 + g)) * n_pools)
+
+
+def make_log_score_s_gprior(*, D, y, M, R, prof_idx_of_policy, policies, policy_means,
+                            g: float, sigma2: float, lam: float, lattice_edges=None):
+    """Factory: returns log_score_s(state) -> float (log-space, no clamp)."""
+    def log_score_s(state):
+        return log_score_s_gprior(state, D, y, M, R, prof_idx_of_policy, policies,
+                                   policy_means, g=g, sigma2=sigma2, lam=lam,
+                                   lattice_edges=lattice_edges)
+    return log_score_s
 
 def parallel_ais(
     out_jsonl: str,
@@ -1665,8 +1693,8 @@ def mu_qqplot(mu_hat, mu_true):
 # 7) Pilot run to decide temperature ladder
 ###
 
-def _logp(state, score_s: Callable) -> float:
-    return math.log(max(1e-300, float(score_s(state))))
+def _logp(state, log_score_s: Callable) -> float:
+    return float(log_score_s(state))
 
 def _ess_from_logw(logw: np.ndarray) -> float:
     """ESS for *incremental* weights; returns ESS count (not ratio)."""
@@ -1685,7 +1713,7 @@ def _normalize_logw(logw: np.ndarray) -> np.ndarray:
 def pilot_adaptive_ladder(
     init_sampler: Callable[[int], List],         # returns a list of N initial States ~ q0 (or your RPS-init)
     log_p0: Callable[[List], float],             # log q0(x)
-    score_s: Callable[[List], float],            # unnormalized target (positive), log taken inside
+    log_score_s: Callable[[List], float] = None, # log-posterior score (log-space, no clamp)
     N: int = 512,                                # probe particle count
     ess_target: float = 0.80,                    # target ESS ratio per step (0.7–0.9 typical)
     beta0: float = 0.0, beta1: float = 1.0,      # bridge endpoints
@@ -1694,7 +1722,8 @@ def pilot_adaptive_ladder(
     max_levels: int = 1000,                      # safety cap
     moves_per_probe: int = 0,                    # optional light mixing at each accepted β
     min_len: int = 1,                            # passed to your MH move
-    rng_seed: Optional[int] = 1234
+    rng_seed: Optional[int] = 1234,
+    score_s: Callable[[List], float] = None,     # deprecated, use log_score_s
 ) -> Tuple[np.ndarray, List[float]]:
     """
     Returns:
@@ -1704,6 +1733,11 @@ def pilot_adaptive_ladder(
       - Inserts rungs by halving Δβ whenever ESS/N < ess_target.
       - After accepting a step, does multinomial resample and (optional) a few MH moves at that β.
     """
+    if log_score_s is None and score_s is not None:
+        log_score_s = lambda z: math.log(max(1e-300, score_s(z)))
+    if log_score_s is None:
+        raise ValueError("Provide log_score_s (preferred) or score_s.")
+
     if rng_seed is not None:
         np.random.seed(rng_seed); random.seed(rng_seed)
 
@@ -1716,7 +1750,7 @@ def pilot_adaptive_ladder(
     delta = initial_delta
 
     # Precompute logp−logq0 for efficiency (updated only after moves)
-    logp_minus_logq = np.array([_logp(x, score_s) - float(log_p0(x)) for x in X], dtype=float)
+    logp_minus_logq = np.array([_logp(x, log_score_s) - float(log_p0(x)) for x in X], dtype=float)
 
     while beta < beta1 - 1e-12 and len(ladder) < max_levels:
         beta_try = min(beta + delta, beta1)
@@ -1747,11 +1781,11 @@ def pilot_adaptive_ladder(
                 xi = X[i]
                 for _ in range(moves_per_probe):
                     xi = mh_step_state_uniform_neighbors(
-                        xi, t=beta_try, log_p0=log_p0, score_s=score_s, min_len=min_len
+                        xi, t=beta_try, log_p0=log_p0, log_score_s=log_score_s, min_len=min_len
                     )
                 X[i] = xi
             # refresh logp−logq0 after moves
-            logp_minus_logq = np.array([_logp(x, score_s) - float(log_p0(x)) for x in X], dtype=float)
+            logp_minus_logq = np.array([_logp(x, log_score_s) - float(log_p0(x)) for x in X], dtype=float)
 
         # 6) advance
         beta = beta_try
@@ -2827,24 +2861,31 @@ def pac_bayes_bound(log_scores, n_obs, n_prior, delta=0.05):
 def run_pac_bayes_explorer(
     init_states,
     init_log_scores,
-    score_s,
-    n_obs,
-    n_prior,
+    score_s=None,
+    n_obs=None,
+    n_prior=None,
     n_steps=300,
     delta=0.05,
     min_len=1,
     frontier_cap=500,
     seed=None,
+    log_score_s=None,
 ):
     """
     Greedy PAC-Bayes state-space explorer seeded from an initial set of states.
     At each step, adds the frontier neighbor that minimises the PAC-Bayes bound.
+    log_score_s: callable returning log-posterior score (log-space, no clamp). Preferred over score_s.
 
     Returns:
         states (list): All visited states.
         logs (list): Corresponding log-scores.
         trace (list[dict]): PAC-Bayes bound dict at each step.
     """
+    if log_score_s is None and score_s is not None:
+        log_score_s = lambda z: math.log(max(1e-300, score_s(z)))
+    if log_score_s is None:
+        raise ValueError("Provide log_score_s (preferred) or score_s.")
+
     rng = np.random.default_rng(seed)
     visited    = {}
     log_scores = []
@@ -2858,8 +2899,7 @@ def run_pac_bayes_explorer(
         return True
 
     def score_state(state):
-        import math
-        return math.log(max(1e-300, score_s(state)))
+        return log_score_s(state)
 
     for state, log_score in zip(init_states, init_log_scores):
         add_visited(state, log_score)

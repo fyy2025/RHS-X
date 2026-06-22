@@ -116,14 +116,14 @@ def main():
     RPS_states = AIS.raggregate_to_states((R_set, rashomon_profiles), profiles_hasse)
 
     sigma2 = AIS.compute_sigma2_saturated(D, y, all_policies)
-    score_s = AIS.make_score_s_gprior(
+    log_score_s = AIS.make_log_score_s_gprior(
         D=D, y=y, M=M, R=R,
         prof_idx_of_policy=prof_idx_of_policy,
         policies=all_policies, policy_means=policy_means,
         g=float(num_data), sigma2=sigma2, lam=reg,
     )
 
-    log_alpha  = [math.log(max(1e-300, score_s(s))) for s in RPS_states]
+    log_alpha  = [log_score_s(s) for s in RPS_states]
     print(f"Built {len(RPS_states)} RPS states")
     normal_kw = dict(
         D=D, y=y, M=M,
@@ -163,7 +163,7 @@ def main():
         MCMC.run_mcmc_streaming(
             RPS=RPS_states,
             log_alpha=log_alpha,
-            score_s=score_s,
+            log_score_s=log_score_s,
             steps=args.mcmc_steps,
             burnin=args.mcmc_burnin,
             thin=args.mcmc_thin,
@@ -213,7 +213,7 @@ def main():
     ladder, _ = AIS.pilot_adaptive_ladder(
         init_sampler=init_sampler,
         log_p0=log_p0,
-        score_s=score_s,
+        log_score_s=log_score_s,
         N=512,
         ess_target=0.80,
         beta0=0.0, beta1=1.0,
@@ -227,7 +227,7 @@ def main():
     ais_out = AIS.run_ais_state_streaming(
         buckets=buckets,
         anchors=RPS_states,
-        score_s=score_s,
+        log_score_s=log_score_s,
         cfg=cfg,
         RPS=RPS_states,
         R_per=np.asarray(R, int),
@@ -258,7 +258,7 @@ def main():
     pb_states, pb_log_scores, pb_trace = AIS.run_pac_bayes_explorer(
         init_states=RPS_states,
         init_log_scores=log_alpha,
-        score_s=score_s,
+        log_score_s=log_score_s,
         n_obs=n_obs,
         n_prior=n_prior,
         n_steps=args.pb_steps,

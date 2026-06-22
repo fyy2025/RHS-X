@@ -272,7 +272,7 @@ def main():
     print(f"Built {len(RPS_states)} RPS states")
 
     sigma2 = AIS.compute_sigma2_saturated(D_nhanes, y, policies_nhanes)
-    score_s = AIS.make_score_s_gprior(
+    log_score_s = AIS.make_log_score_s_gprior(
         D=D_nhanes, y=y, M=M, R=R,
         prof_idx_of_policy=prof_idx_nhanes,
         policies=policies_nhanes, policy_means=policy_means_nhanes,
@@ -316,7 +316,7 @@ def main():
         MCMC.run_mcmc_streaming(
             RPS=RPS_states,
             log_alpha=log_alpha,
-            score_s=score_s,
+            log_score_s=log_score_s,
             steps=args.mcmc_steps,
             burnin=args.mcmc_burnin,
             thin=args.mcmc_thin,
@@ -366,7 +366,7 @@ def main():
     ladder, _ = AIS.pilot_adaptive_ladder(
         init_sampler=init_sampler,
         log_p0=log_p0,
-        score_s=score_s,
+        log_score_s=log_score_s,
         N=512,
         ess_target=0.80,
         beta0=0.0, beta1=1.0,
@@ -380,7 +380,7 @@ def main():
     ais_out = AIS.run_ais_state_streaming(
         buckets=buckets,
         anchors=RPS_states,
-        score_s=score_s,
+        log_score_s=log_score_s,
         cfg=cfg,
         RPS=RPS_states,
         R_per=np.asarray(R, int),
@@ -411,7 +411,7 @@ def main():
     pb_states, pb_log_scores, pb_trace = AIS.run_pac_bayes_explorer(
         init_states=RPS_states,
         init_log_scores=log_alpha,
-        score_s=score_s,
+        log_score_s=log_score_s,
         n_obs=n_obs,
         n_prior=n_prior,
         n_steps=args.pb_steps,

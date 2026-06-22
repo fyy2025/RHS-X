@@ -26,22 +26,22 @@ def init_from_RPS_batch(RPS, log_alpha, batch_N, rng_seed=None):
     return [AIS._copy_state(RPS[i]) for i in idx]
 
 # --- one MH step targeting the true posterior p(x) ∝ score_s(x) ---
-def mh_step_true_posterior(x, score_s, min_len=1):
+def mh_step_true_posterior(x, log_score_s, min_len=1):
+    """log_score_s: callable returning log-posterior score (log-space, no clamp)."""
     N_cur = [n for n in AIS.state_neighbors_ubs(x, min_len=min_len) if not AIS.states_equal(n, x)]
-    if not N_cur: 
+    if not N_cur:
         return x, 0
     prop = random.choice(N_cur)
     N_prop = [n for n in AIS.state_neighbors_ubs(prop, min_len=min_len) if not AIS.states_equal(n, prop)]
-    lcur = math.log(max(1e-300, score_s(x)))
-    lprop = math.log(max(1e-300, score_s(prop)))
-    # uniform-neighbor proposal → include degree correction
+    lcur = log_score_s(x)
+    lprop = log_score_s(prop)
     logr = (lprop - lcur) + math.log(max(1, len(N_cur))) - math.log(max(1, len(N_prop)))
     if math.log(random.random() + 1e-300) < min(0.0, logr):
         return prop, 1
     return x, 0
 
 # --- single chain ---
-def run_mcmc_chain(score_s,
+def run_mcmc_chain(log_score_s,
                    RPS: List, log_alpha: List[float],
                    steps=20000, burnin=2000, thin=10,
                    seed=0, min_len=1):
@@ -53,7 +53,7 @@ def run_mcmc_chain(score_s,
     samples = []
 
     for t in range(steps):
-        x, acc = mh_step_true_posterior(x, score_s, min_len=min_len)
+        x, acc = mh_step_true_posterior(x, log_score_s, min_len=min_len)
         accepts += acc
         if t >= burnin and ((t - burnin) % thin == 0):
             samples.append(AIS._copy_state(x))
@@ -62,13 +62,13 @@ def run_mcmc_chain(score_s,
     return samples, acc_rate
 
 # --- multiple chains + aggregation to a posterior over states ---
-def run_mcmc(score_s, RPS, log_alpha,
+def run_mcmc(log_score_s, RPS, log_alpha,
              n_chains=8, steps=20000, burnin=2000, thin=10,
              seed=0, min_len=1):
     all_samples = []
     acc_rates = []
     for c in range(n_chains):
-        samples, ar = run_mcmc_chain(score_s, RPS, log_alpha,
+        samples, ar = run_mcmc_chain(log_score_s, RPS, log_alpha,
                                      steps=steps, burnin=burnin, thin=thin,
                                      seed=seed + 31*c, min_len=min_len)
         all_samples.extend(samples)
@@ -706,24 +706,10 @@ def _jsonable_to_state(obj):
         out.append(AIS.ProfilePart(cov_ids=cov, B=arr))
     return out
 
-def mh_step_true_posterior(x: State, score_s: Callable[[State], float], min_len=1):
-    """Same MH step you used: uniform over neighbors with degree correction."""
-    N_cur = [n for n in AIS.state_neighbors_ubs(x, min_len=min_len) if not AIS.states_equal(n, x)]
-    if not N_cur:
-        return x, 0
-    prop = random.choice(N_cur)
-    N_prop = [n for n in AIS.state_neighbors_ubs(prop, min_len=min_len) if not AIS.states_equal(n, prop)]
-    lcur = math.log(max(1e-300, score_s(x)))
-    lprop = math.log(max(1e-300, score_s(prop)))
-    logr = (lprop - lcur) + math.log(max(1, len(N_cur))) - math.log(max(1, len(N_prop)))
-    if math.log(random.random() + 1e-300) < min(0.0, logr):
-        return prop, 1
-    return x, 0
-
 def run_mcmc_streaming(
-    RPS: List, 
+    RPS: List,
     log_alpha: List[float],
-    score_s: Callable[[State], float],
+    log_score_s: Callable[[State], float],
     steps: int = 50000,
     burnin: int = 5000,
     thin: int = 5,
@@ -734,7 +720,7 @@ def run_mcmc_streaming(
 ):
     """
     Runs MH and appends every `thin`-th post-burn-in sample to out_jsonl immediately.
-    Start with a random initial state instead of informed RPS warm start
+    log_score_s: callable returning log-posterior score (log-space, no clamp).
     """
     if seed is not None:
         np.random.seed(seed); random.seed(seed)
@@ -752,7 +738,7 @@ def run_mcmc_streaming(
     # open in append mode so you can resume / tail the file
     with open(out_jsonl, "a", encoding="utf-8") as f:
         for t in range(steps):
-            x, acc = mh_step_true_posterior(x, score_s, min_len=min_len)
+            x, acc = mh_step_true_posterior(x, log_score_s, min_len=min_len)
             accepts += acc
 
             # keep sample on schedule
@@ -760,7 +746,7 @@ def run_mcmc_streaming(
                 rec = {
                     "iter": t,
                     "state": _state_to_jsonable(x),
-                    "log_score": float(math.log(max(1e-300, score_s(x))))
+                    "log_score": float(log_score_s(x))
                 }
                 f.write(json.dumps(rec) + "\n")
                 f.flush()  # ensures it’s on disk right away
@@ -785,7 +771,7 @@ def run_mcmc_streaming_rand_start(
     profiles: Optional[List[Tuple[int, ...]]],
     M: int,
     R: Sequence[int],
-    score_s,
+    log_score_s,
     seed: Optional[int] = None,
     steps: int = 50000,
     burnin: int = 5000,
@@ -796,7 +782,8 @@ def run_mcmc_streaming_rand_start(
 ):
     """
     Runs MH and appends every `thin`-th post-burn-in sample to out_jsonl immediately.
-    Start with a random initial state instead of informed RPS warm start
+    Start with a random initial state instead of informed RPS warm start.
+    log_score_s: callable returning log-posterior score (log-space, no clamp).
     """
     if seed is not None:
         np.random.seed(seed); random.seed(seed)
@@ -818,7 +805,7 @@ def run_mcmc_streaming_rand_start(
     # open in append mode so you can resume / tail the file
     with open(out_jsonl, "a", encoding="utf-8") as f:
         for t in range(steps):
-            x, acc = mh_step_true_posterior(x, score_s, min_len=min_len)
+            x, acc = mh_step_true_posterior(x, log_score_s, min_len=min_len)
             accepts += acc
 
             # keep sample on schedule
@@ -826,7 +813,7 @@ def run_mcmc_streaming_rand_start(
                 rec = {
                     "iter": t,
                     "state": _state_to_jsonable(x),
-                    "log_score": float(math.log(max(1e-300, score_s(x))))
+                    "log_score": float(log_score_s(x))
                 }
                 f.write(json.dumps(rec) + "\n")
                 f.flush()  # ensures it’s on disk right away
