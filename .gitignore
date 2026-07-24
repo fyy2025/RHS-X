@@ -186,3 +186,7 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 Results/harvard_talk_april_11_pickles/*
+
+# Binary artifacts
+*.pkl
+*.png
