@@ -241,10 +241,11 @@ def main():
         )
 
         # ── Per-theta: RPS / AIS(RPS) / AIS(random) / PAC-Bayes ─────────────
+        lamb_tilde = 2*sigma2*(1+g)*(lamb+np.log(1+g)/2)/(g*g) # using g = n
         for theta in thetas:
             H = np.inf
             R_set, R_profiles = aggregate.RAggregate(
-                M, R, H, D, y, theta, reg=lamb, verbose=False)
+                M, R, H, D, y, theta, reg=lamb_tilde, verbose=False)
             anchors    = AIS.build_anchor_states(R_set, R_profiles, M, R)
             if len(anchors) == 0:
                 print(f"  theta={theta}: empty RPS, skipping")
