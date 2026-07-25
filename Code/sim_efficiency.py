@@ -364,10 +364,12 @@ def make_p0(eps, log_pi, S, L1, P, a_S=0.9, a_L=0.08):
 
 
 def chi2_divergence(log_pi, p0):
-    """Exact chi^2(pi || p0) = sum_i pi_i^2 / p0_i - 1  (pi normalised)."""
+    """Exact chi^2(pi || p0) = sum_i pi_i^2 / p0_i - 1  (pi normalised).
+    Clamped at 0 (it is nonnegative; can go slightly negative from rounding when
+    p0 == pi, e.g. when the RPS covers the whole space)."""
     pi = np.exp(log_pi - log_pi.max())
     pi = pi / pi.sum()
-    return float(np.sum(pi ** 2 / p0) - 1.0)
+    return max(0.0, float(np.sum(pi ** 2 / p0) - 1.0))
 
 
 def temper_to_perplexity(log_pi_raw, target_perp, tol=1e-4):
