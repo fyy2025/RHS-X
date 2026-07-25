@@ -213,17 +213,16 @@ def build_model_space(scenario=1, num_samples_per_feature=500, lamb=1, data_seed
 # ---------------------------------------------------------------------------
 # 2a. RPS from RAggregate at a Rashomon threshold (the real pipeline)
 # ---------------------------------------------------------------------------
-def rps_via_raggregate(ms, theta_gap):
+def rps_via_raggregate(ms, theta_gap=None, theta_ra=None):
     """Compute the RPS at a posterior-gap Rashomon threshold using the ACTUAL
     RAggregate branch-and-bound, run with reg* so its MSE loss equals the
     g-prior loss L_gp = A*SSE + B*|Pi| (up to the constant 1/(A*N)).
 
-    theta_gap is in g-prior log-posterior units (partitions within this many
-    nats of the MAP). Returns (S, L1, theta_RA) where S, L1 are index arrays
-    into the enumerated space and theta_RA is the ABSOLUTE threshold actually
-    handed to RAggregate under reg* (theta_RA = (L_gp_min + theta_gap)/(A*N))
-    -- i.e. the number you'd pass RAggregate in production. On the tiny
-    enumerable space this is identical to thresholding L_gp directly -- validated
+    Provide EITHER theta_gap (g-prior nats above the MAP) OR theta_ra (the raw
+    absolute threshold you'd pass RAggregate, e.g. the ~1.02 production values).
+    Returns (S, L1, theta_RA) where S, L1 are index arrays into the enumerated
+    space and theta_RA = (L_gp_min + theta_gap)/(A*N). On the tiny enumerable
+    space this is identical to thresholding L_gp directly -- validated
     5-for-5 / 34-for-34 earlier -- but it exercises the real code path.
     """
     from rashomon import aggregate
@@ -234,7 +233,10 @@ def rps_via_raggregate(ms, theta_gap):
     L_gp = -ms["log_pi"]
     MAP = float(L_gp.min())
     # RAggregate thresholds Q_mse <= theta_mse, and Q_mse = L_gp/(A*N):
-    theta_mse = (MAP + theta_gap) / (A * N)
+    if theta_ra is not None:
+        theta_mse = theta_ra                        # absolute threshold given directly
+    else:
+        theta_mse = (MAP + theta_gap) / (A * N)     # from posterior gap above the MAP
 
     R_set, R_profiles = aggregate.RAggregate(
         ms["M"], ms["R"], np.inf, ms["D"], ms["y"], theta_mse,
@@ -474,6 +476,11 @@ def main():
                          "Each gives a different RPS via RAggregate(reg*) -> a different seed proposal. "
                          "Keep them in the transition range (RPS grows from 1 to covering the "
                          "posterior); above that chi^2 saturates and T_min floors at 1.")
+    ap.add_argument("--theta_RA", type=str, default=None,
+                    help="comma-separated ABSOLUTE RAggregate thresholds (e.g. production's "
+                         "1.018,1.02,1.022,1.024,1.026). Overrides --theta_gaps. NOTE: theta_RA is "
+                         "n-specific -- it only reproduces the production RPS when run at the SAME "
+                         "num_samples (=500), which is the point-mass regime.")
     ap.add_argument("--eps1", type=float, default=0.8,
                     help="mass on the RPS S (~ posterior). Same eps1 as the production bucket.")
     ap.add_argument("--eps2", type=float, default=0.8,
@@ -496,7 +503,11 @@ def main():
     ap.add_argument("--outdir", type=str, default="../Figures")
     args = ap.parse_args()
 
-    theta_gaps = [float(t) for t in args.theta_gaps.split(",")]
+    use_ra = args.theta_RA is not None
+    if use_ra:
+        sweep_vals = [float(t) for t in args.theta_RA.split(",")]   # absolute RAggregate thresholds
+    else:
+        sweep_vals = [float(t) for t in args.theta_gaps.split(",")]  # posterior gaps above the MAP
     T_grid = [int(t) for t in args.T_grid.split(",")]
     os.makedirs(args.outdir, exist_ok=True)
     rng = np.random.default_rng(args.seed)
@@ -525,16 +536,23 @@ def main():
 
     # For each Rashomon threshold theta_gap: RPS via RAggregate(reg*), build the
     # seed proposal from it, and record its exact chi^2 to the posterior.
-    print("\nBuilding RPS + proposal per Rashomon threshold (RAggregate reg*) ...")
+    print("\nBuilding RPS + proposal per Rashomon threshold (RAggregate reg*)"
+          f" [sweeping {'theta_RA' if use_ra else 'theta_gap'}] ...")
+    A, N = ms["A"], ms["N"]; MAP = float((-ms["log_pi"]).min())
+    theta_gaps = sweep_vals   # dict keys are the swept values (gaps, or theta_RA if --theta_RA)
     p0s, chi2s, rps_size, theta_RA = {}, {}, {}, {}
-    for th in theta_gaps:
-        S, L1, th_RA = rps_via_raggregate(ms, th)
+    for th in sweep_vals:
+        if use_ra:
+            S, L1, th_RA = rps_via_raggregate(ms, theta_ra=th)
+        else:
+            S, L1, th_RA = rps_via_raggregate(ms, theta_gap=th)
+        gap_true = A * N * th_RA - MAP              # posterior gap (nats) actually realised
         p0 = make_p0_bucket(S, L1, log_pi, P, args.eps1, args.eps2)
         p0s[th] = p0
         chi2s[th] = chi2_divergence(log_pi, p0)
         rps_size[th] = len(S)
         theta_RA[th] = th_RA
-        print(f"  theta_gap={th:<7g} theta_RA={th_RA:.6g} |RPS|={len(S):<6d} "
+        print(f"  theta_RA={th_RA:.6g} gap={gap_true:<8.3g} |RPS|={len(S):<6d} "
               f"|L1|={len(L1):<6d} chi2={chi2s[th]:.3f}", flush=True)
 
     # sweep T x theta (averaged over reps)

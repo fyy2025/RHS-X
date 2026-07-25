@@ -21,8 +21,8 @@ N_PATHS=6000
 REPS=6
 MOVES_PER_LEVEL=5
 SCHEDULE_POWER=3.0
-EPS1=0.8                   # mass on RPS (~posterior). eps2==eps1 -> 2-region proposal (RPS+uniform
-EPS2=0.8                   # rest); set EPS2>EPS1 (e.g. 0.7 vs 0.4) for the production 3-region bucket.
+EPS1=0.4                   # production values: eps1 on RPS, eps2-eps1 on L1(1-flip nbrs), 1-eps2 on
+EPS2=0.7                   # complement (the actual make_p0_buckets_weighted_S0 proposal, 3-region).
 NUM_SAMPLES=20            # samples/policy. LOW spreads the posterior off a point mass (n=500 is
                           # near point mass). Check the .out perplexity; raise/lower to taste.
 MU_SCALE=0.25             # shrink pool-mean separations (helps spread the posterior)
