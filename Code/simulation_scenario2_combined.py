@@ -64,7 +64,7 @@ def main():
                         help="Number of annealing ladder rungs (10**-0.9 .. 1.0). "
                              "Fewer rungs = less annealing = stronger seed effect.")
     parser.add_argument("--thetas",   type=str,
-                        default="13.0,13.1,13.2,13.3,13.4",
+                        default="1.018,1.02,1.022,1.024,1.026",
                         help="Comma-separated theta values for the Rashomon set")
     args = parser.parse_args()
 

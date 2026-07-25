@@ -19,11 +19,18 @@ made, all documented here):
 
   * Model space  : scenario 1 (M=2, R=[4,3]); the full partition space is
                    enumerated with `AIS.enumerate_all_states_and_losses`.
-  * Target pi    : the g-prior posterior, pi(Pi) propto exp(log_score_s_gprior),
+  * Target pi    : the true g-prior posterior, pi(Pi) propto exp(log_score_s_gprior),
                    i.e. the SAME object MCMC / AIS target elsewhere in this repo.
-  * Seed set S   : the top-`k` partitions by posterior mass (a stand-in for the
-                   near-optimal RPS). L1(S) = its 1-flip (single Sigma-entry)
-                   neighbours, obtained from `AIS.state_neighbors_ubs`.
+                   Untempered by default (--target_perplexity 0). NOTE: on
+                   scenario 1 this posterior is a near point mass (perplexity
+                   ~1.1); --target_perplexity>0 tempers it for a cleaner
+                   illustration at the cost of faithfulness.
+  * Seed set S   : the TRUE g-prior RPS by default (--seed_mode rps): every
+                   partition within `rps_gap` log-posterior units of the MAP
+                   (posterior-gap Rashomon set under the g-prior score). Optional
+                   --seed_mode topk uses the top-k posterior states. L1(S) = its
+                   1-flip (single Sigma-entry) neighbours from
+                   `AIS.state_neighbors_ubs`.
   * Proposal p0  : the bucket proposal of apara2025 -- mass alpha1 on S
                    (distributed proportional to the posterior), alpha2-alpha1 on
                    L1(S) (uniform), 1-alpha2 on the complement (uniform).
@@ -55,10 +62,54 @@ from rashomon import hasse, extract_pools, loss, AIS
 
 
 # ---------------------------------------------------------------------------
-# 1. Build the 64-partition model space with an exact g-prior posterior
+# 1. Build the model space with an exact g-prior posterior
 # ---------------------------------------------------------------------------
-def build_model_space(num_samples_per_feature=500, lamb=1, data_seed=42):
-    """Enumerate the scenario-1 partition space and return, as flat arrays over
+def scenario_config(scenario, mu_scale=1.0, var_scale=1.0):
+    """Return (M, R, sigma, mu, var) for the requested scenario -- the exact
+    ground-truth pooling structures used by simulation_scenario{1,2}.
+
+    mu_scale shrinks the pool-mean separations and var_scale inflates the noise
+    SD (note: `var` is used as the scale/SD in np.random.normal). Both make the
+    poolings harder to tell apart, spreading the g-prior posterior over more
+    partitions instead of collapsing it onto a single MAP (point mass)."""
+    if scenario == 1:
+        M = 2
+        R = np.array([4, 3])
+        sigma_00 = None;               mu_00 = np.array([0]);      var_00 = np.array([1])
+        sigma_01 = np.array([[1]]);    mu_01 = np.array([-1]);     var_01 = np.array([1])
+        sigma_10 = np.array([[1, 0]]); mu_10 = np.array([-2, -3]); var_10 = np.array([1, 1])
+        sigma_11 = np.array([[0, 1], [0, np.inf]])
+        mu_11 = np.array([2, 3, -1, 1]); var_11 = np.array([1, 1, 1, 1])
+        sigma = [sigma_00, sigma_01, sigma_10, sigma_11]
+        mu    = [mu_00, mu_01, mu_10, mu_11]
+        var   = [var_00, var_01, var_10, var_11]
+    elif scenario == 2:
+        M = 3
+        R = np.array([4, 3, 3])
+        sigma_000 = None;                 mu_000 = np.array([0]);     var_000 = np.array([1])
+        sigma_001 = np.array([[1]]);      mu_001 = np.array([-2]);    var_001 = np.array([1])
+        sigma_010 = np.array([[1]]);      mu_010 = np.array([-1.5]);  var_010 = np.array([1])
+        sigma_011 = np.array([[1], [0]]); mu_011 = np.array([-1, 2]); var_011 = np.array([1, 1])
+        sigma_100 = np.array([[0, 1]]);   mu_100 = np.array([-1.5, 1]); var_100 = np.array([1, 1])
+        sigma_101 = np.array([[0, 1], [0, np.inf]])
+        mu_101 = np.array([-0.5, 2.5, 1.5, -2.5]); var_101 = np.array([1, 1, 1, 1])
+        sigma_110 = np.array([[0, 1], [1, np.inf]]); mu_110 = np.array([0, -2.5]); var_110 = np.array([1, 1])
+        sigma_111 = np.array([[0, 1], [1, np.inf], [0, np.inf]])
+        mu_111 = np.array([3, -0.5, -1.5, -2]); var_111 = np.array([1, 1, 1, 1])
+        sigma = [sigma_000, sigma_001, sigma_010, sigma_011,
+                 sigma_100, sigma_101, sigma_110, sigma_111]
+        mu    = [mu_000, mu_001, mu_010, mu_011, mu_100, mu_101, mu_110, mu_111]
+        var   = [var_000, var_001, var_010, var_011, var_100, var_101, var_110, var_111]
+    else:
+        raise ValueError(f"scenario must be 1 or 2, got {scenario}")
+    mu  = [np.asarray(m, dtype=float) * mu_scale for m in mu]
+    var = [np.asarray(v, dtype=float) * var_scale for v in var]
+    return M, R, sigma, mu, var
+
+
+def build_model_space(scenario=1, num_samples_per_feature=500, lamb=1, data_seed=42,
+                      mu_scale=1.0, var_scale=1.0, build_neighbors=True):
+    """Enumerate the scenario's partition space and return, as flat arrays over
     the enumerated states:
 
         log_pi  : (P,) unnormalised log target (g-prior log posterior)
@@ -66,23 +117,12 @@ def build_model_space(num_samples_per_feature=500, lamb=1, data_seed=42):
         deg     : (P,) neighbour counts
         states  : list of the underlying State objects (for reference)
     """
-    M = 2
-    R = np.array([4, 3])
+    M, R, sigma, mu, var = scenario_config(scenario, mu_scale=mu_scale, var_scale=var_scale)
 
     profiles, profile_map = hasse.enumerate_profiles(M)
     all_policies = hasse.enumerate_policies(M, R)
     num_policies = len(all_policies)
     g = num_policies * num_samples_per_feature  # unit-information prior, g = n
-
-    # --- scenario-1 ground-truth pooling structure (same as simulation_scenario1) ---
-    sigma_00 = None;               mu_00 = np.array([0]);      var_00 = np.array([1])
-    sigma_01 = np.array([[1]]);    mu_01 = np.array([-1]);     var_01 = np.array([1])
-    sigma_10 = np.array([[1, 0]]); mu_10 = np.array([-2, -3]); var_10 = np.array([1, 1])
-    sigma_11 = np.array([[0, 1], [0, np.inf]])
-    mu_11 = np.array([2, 3, -1, 1]); var_11 = np.array([1, 1, 1, 1])
-    sigma = [sigma_00, sigma_01, sigma_10, sigma_11]
-    mu    = [mu_00, mu_01, mu_10, mu_11]
-    var   = [var_00, var_01, var_10, var_11]
 
     policies_profiles = {}
     pi_policies = {}
@@ -137,33 +177,144 @@ def build_model_space(num_samples_per_feature=500, lamb=1, data_seed=42):
                                policy_means, g=g, sigma2=sigma2, lam=lamb)
         for s in states])
 
-    # 1-flip neighbour graph (index space)
+    # 1-flip neighbour graph (index space). Skippable for a fast perplexity/RPS
+    # preview (this is the expensive part on the 65536-state scenario 2).
     sig2idx = {AIS.state_signature(s): i for i, s in enumerate(states)}
-    neigh_lists = []
-    for s in states:
-        nb = []
-        for n in AIS.state_neighbors_ubs(s, min_len=1):
-            j = sig2idx.get(AIS.state_signature(n))
-            if j is not None:
-                nb.append(j)
-        neigh_lists.append(sorted(set(nb)))
-    deg = np.array([len(nb) for nb in neigh_lists])
-    max_deg = int(deg.max())
-    neigh = -np.ones((P, max_deg), dtype=int)
-    for i, nb in enumerate(neigh_lists):
-        neigh[i, :len(nb)] = nb
+    if build_neighbors:
+        neigh_lists = []
+        for s in states:
+            nb = []
+            for n in AIS.state_neighbors_ubs(s, min_len=1):
+                j = sig2idx.get(AIS.state_signature(n))
+                if j is not None:
+                    nb.append(j)
+            neigh_lists.append(sorted(set(nb)))
+        deg = np.array([len(nb) for nb in neigh_lists])
+        max_deg = int(deg.max())
+        neigh = -np.ones((P, max_deg), dtype=int)
+        for i, nb in enumerate(neigh_lists):
+            neigh[i, :len(nb)] = nb
+    else:
+        neigh, deg = None, None
 
-    return dict(states=states, log_pi=log_pi, neigh=neigh, deg=deg, P=P)
+    # g-prior loss coefficients L_gp = A*SSE + B*|Pi|  (= -log_score_s_gprior),
+    # and reg* that makes RAggregate's MSE loss proportional to L_gp:
+    #   Q_mse = SSE/N + reg*.h = L_gp / (A*N)   ->   same RPS as the g-prior.
+    N = int(y.shape[0])
+    A = g / (2.0 * sigma2 * (1.0 + g))
+    B = lamb + 0.5 * math.log(1.0 + g)
+    reg_star = B / (A * N)
+
+    return dict(states=states, log_pi=log_pi, neigh=neigh, deg=deg, P=P,
+                sig2idx=sig2idx, profiles=profiles, D=D, y=y, M=M, R=R,
+                A=A, B=B, N=N, reg_star=reg_star)
 
 
 # ---------------------------------------------------------------------------
-# 2. Seed-set bucket proposal p0(eps) and its exact chi^2 divergence
+# 2a. RPS from RAggregate at a Rashomon threshold (the real pipeline)
+# ---------------------------------------------------------------------------
+def rps_via_raggregate(ms, theta_gap):
+    """Compute the RPS at a posterior-gap Rashomon threshold using the ACTUAL
+    RAggregate branch-and-bound, run with reg* so its MSE loss equals the
+    g-prior loss L_gp = A*SSE + B*|Pi| (up to the constant 1/(A*N)).
+
+    theta_gap is in g-prior log-posterior units (partitions within this many
+    nats of the MAP). Returns (S, L1, theta_RA) where S, L1 are index arrays
+    into the enumerated space and theta_RA is the ABSOLUTE threshold actually
+    handed to RAggregate under reg* (theta_RA = (L_gp_min + theta_gap)/(A*N))
+    -- i.e. the number you'd pass RAggregate in production. On the tiny
+    enumerable space this is identical to thresholding L_gp directly -- validated
+    5-for-5 / 34-for-34 earlier -- but it exercises the real code path.
+    """
+    from rashomon import aggregate
+
+    A, B, N = ms["A"], ms["B"], ms["N"]
+    reg_star = ms["reg_star"]
+    # L_gp(Pi) = -log_score_s_gprior; MAP = min over the enumerated space.
+    L_gp = -ms["log_pi"]
+    MAP = float(L_gp.min())
+    # RAggregate thresholds Q_mse <= theta_mse, and Q_mse = L_gp/(A*N):
+    theta_mse = (MAP + theta_gap) / (A * N)
+
+    R_set, R_profiles = aggregate.RAggregate(
+        ms["M"], ms["R"], np.inf, ms["D"], ms["y"], theta_mse,
+        reg=reg_star, verbose=False, num_workers=1)
+    rps_states = AIS.raggregate_to_states((R_set, R_profiles), ms["profiles"])
+
+    sig2idx = ms["sig2idx"]
+    S = sorted({sig2idx[AIS.state_signature(s)] for s in rps_states
+                if AIS.state_signature(s) in sig2idx})
+    S = np.array(S, dtype=int)
+
+    neigh, deg = ms["neigh"], ms["deg"]
+    Sset = set(S.tolist())
+    L1 = set()
+    for i in S:
+        for slot in range(deg[i]):
+            j = int(neigh[i, slot])
+            if j not in Sset:
+                L1.add(j)
+    return S, np.array(sorted(L1), dtype=int), theta_mse
+
+
+def make_p0_bucket(S, L1, log_pi, P, eps1, eps2):
+    """Production-style eps1/eps2 seed proposal (make_p0_buckets_weighted_S0),
+    unified so it covers the two- and three-region cases:
+
+        eps1        mass on the RPS S, distributed proportional to the posterior
+        eps2 - eps1 mass on L1(S), the 1-flip neighbours, uniform
+        1 - eps2    mass on the complement, uniform
+
+    Setting eps2 == eps1 collapses the L1 bucket to zero width -> TWO regions:
+    `eps1` on the RPS + `(1 - eps1)` uniform over EVERYTHING else (L1 folded into
+    the complement, so it is not a zero-mass hole). eps2 > eps1 gives the full
+    three-region production proposal with extra emphasis on the neighbours.
+    Always covers the whole space (p0 > 0 everywhere -> finite chi^2)."""
+    wS = np.exp(log_pi[S] - log_pi[S].max()); wS /= wS.sum()
+    p0 = np.zeros(P)
+    p0[S] = eps1 * wS
+
+    if eps2 > eps1 + 1e-12 and len(L1) > 0:
+        # three-region: RPS / L1 / complement
+        comp = np.ones(P, dtype=bool); comp[S] = False; comp[L1] = False
+        nC = int(comp.sum())
+        p0[L1] = (eps2 - eps1) / len(L1)
+        if nC > 0:
+            p0[comp] = (1.0 - eps2) / nC
+    else:
+        # two-region: RPS + uniform over everything else (L1 in the complement)
+        notS = np.ones(P, dtype=bool); notS[S] = False
+        nR = int(notS.sum())
+        if nR > 0:
+            p0[notS] = (1.0 - eps1) / nR
+    return p0 / p0.sum()
+
+
+# ---------------------------------------------------------------------------
+# 2b. Seed-set bucket proposal p0(eps) and its exact chi^2 divergence
 # ---------------------------------------------------------------------------
 def build_seed_buckets(log_pi, neigh, deg, k):
     """Return (S, L1) index arrays: S = top-k posterior states, L1 = their
     1-flip neighbours that are not already in S."""
     order = np.argsort(-log_pi)
     S = set(order[:k].tolist())
+    L1 = set()
+    for i in S:
+        for slot in range(deg[i]):
+            j = int(neigh[i, slot])
+            if j not in S:
+                L1.add(j)
+    return np.array(sorted(S)), np.array(sorted(L1))
+
+
+def build_seed_rps(log_pi, neigh, deg, gap):
+    """True g-prior RPS: S = {Pi : L_gp(Pi) <= L_gp,min + gap}, i.e. every
+    partition within `gap` log-posterior units of the MAP (posterior-gap
+    Rashomon set). L1 = its 1-flip neighbours. This is the actual Rashomon set
+    under the g-prior score, not a top-k stand-in."""
+    L = -log_pi
+    L = L - L.min()
+    S = set(np.where(L <= gap)[0].tolist())
     L1 = set()
     for i in S:
         for slot in range(deg[i]):
@@ -304,12 +455,31 @@ def relative_ess_AIS(log_p0, log_pi, neigh, deg, T, n_paths, moves_per_level=1,
 # 4. Driver: sweep T for each eps, find minimal T, make the figures
 # ---------------------------------------------------------------------------
 def main():
-    ap = argparse.ArgumentParser(description="AIS efficiency vs seed quality (64-partition space)")
-    ap.add_argument("--k", type=int, default=16,
-                    help="seed-set size |S| (top-k posterior); keep >= target_perplexity so S "
-                         "covers the target support and chi^2 is monotone in seed strength")
-    ap.add_argument("--eps", type=str, default="1.0,0.9,0.8,0.7,0.6,0.5,0.35,0.2,0.1,0.05",
-                    help="comma-separated spread values (eps=1 is the uniform proposal)")
+    ap = argparse.ArgumentParser(description="AIS efficiency vs seed quality (g-prior partition space)")
+    ap.add_argument("--scenario", type=int, default=1, choices=[1, 2],
+                    help="1 = M=2,R=[4,3] (64 states); 2 = M=3,R=[4,3,3] (65536 states)")
+    ap.add_argument("--num_samples", type=int, default=4,
+                    help="samples per policy. LOW by default so the g-prior posterior is SPREAD "
+                         "(not a point mass); n=500 (production) collapses it to the MAP and the "
+                         "sweep degenerates (constant chi^2, all T_min=1).")
+    ap.add_argument("--mu_scale", type=float, default=0.25,
+                    help="shrink pool-mean separations (<1 makes poolings more ambiguous -> spreads "
+                         "the posterior); default 0.25 pairs with the low num_samples above.")
+    ap.add_argument("--var_scale", type=float, default=1.0,
+                    help="inflate noise SD. NOTE: near-no-op -- the g-prior normalises by the "
+                         "estimated sigma^2, so uniform var scaling cancels out.")
+    ap.add_argument("--theta_gaps", type=str,
+                    default="0.25,0.5,0.75,1,1.25,1.5,2,2.5,3,4",
+                    help="comma-separated Rashomon thresholds (posterior gap from the MAP, in nats). "
+                         "Each gives a different RPS via RAggregate(reg*) -> a different seed proposal. "
+                         "Keep them in the transition range (RPS grows from 1 to covering the "
+                         "posterior); above that chi^2 saturates and T_min floors at 1.")
+    ap.add_argument("--eps1", type=float, default=0.8,
+                    help="mass on the RPS S (~ posterior). Same eps1 as the production bucket.")
+    ap.add_argument("--eps2", type=float, default=0.8,
+                    help="cumulative mass on S+L1. eps2==eps1 (default) -> TWO regions (RPS + "
+                         "uniform rest, our current proposal); eps2>eps1 -> production 3-region "
+                         "bucket with extra emphasis on the 1-flip neighbours L1.")
     ap.add_argument("--T_grid", type=str,
                     default="1,2,3,4,6,8,12,16,24,32,48,64,96,128,192,256",
                     help="comma-separated numbers of annealing levels to try")
@@ -319,53 +489,70 @@ def main():
     ap.add_argument("--schedule_power", type=float, default=3.0,
                     help="inverse-temp ladder beta_j=(j/T)^power; >1 packs levels near beta=0")
     ap.add_argument("--target_ess", type=float, default=0.5, help="relative-ESS target for minimal T")
-    ap.add_argument("--target_perplexity", type=float, default=8.0,
-                    help="temper the target posterior to spread over ~this many of the 64 states")
+    ap.add_argument("--target_perplexity", type=float, default=0.0,
+                    help="0 = FAITHFUL untempered g-prior posterior; >0 = temper the target to "
+                         "spread over ~this many states (illustration only)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--outdir", type=str, default="../Figures")
     args = ap.parse_args()
 
-    eps_list = [float(e) for e in args.eps.split(",")]
+    theta_gaps = [float(t) for t in args.theta_gaps.split(",")]
     T_grid = [int(t) for t in args.T_grid.split(",")]
     os.makedirs(args.outdir, exist_ok=True)
     rng = np.random.default_rng(args.seed)
 
-    print("Building 64-partition model space (scenario 1) ...")
-    ms = build_model_space()
+    print(f"Building model space (scenario {args.scenario}) ...")
+    ms = build_model_space(scenario=args.scenario, num_samples_per_feature=args.num_samples,
+                           mu_scale=args.mu_scale, var_scale=args.var_scale)
     neigh, deg, P = ms["neigh"], ms["deg"], ms["P"]
-    # Temper the (pathologically peaked) exact posterior to an illustratable spread
-    log_pi = temper_to_perplexity(ms["log_pi"], args.target_perplexity)
-    perp = math.exp(-np.sum(
-        (lambda w: w * np.log(w + 1e-300))(np.exp(log_pi) / np.exp(log_pi).sum())))
+    if args.target_perplexity and args.target_perplexity > 0:
+        log_pi = temper_to_perplexity(ms["log_pi"], args.target_perplexity)
+        mode = f"tempered to perplexity {args.target_perplexity:g}"
+    else:
+        log_pi = ms["log_pi"] - ms["log_pi"].max()   # FAITHFUL: true g-prior posterior
+        mode = "FAITHFUL untempered g-prior posterior"
+    w = np.exp(log_pi); w /= w.sum()
+    perp = math.exp(-np.sum(w * np.log(w + 1e-300)))
     print(f"  |P| = {P} partitions | degrees: min={deg.min()} max={deg.max()} mean={deg.mean():.1f}")
-    print(f"  target tempered to perplexity {perp:.1f} of {P} states")
+    print(f"  target: {mode}  ->  perplexity {perp:.2f} of {P} states")
+    if perp < 2.0:
+        print(f"  !! WARNING: posterior is near a POINT MASS (perplexity {perp:.2f}). The theta "
+              f"sweep will degenerate (chi^2 ~constant, all T_min=1). Lower --num_samples "
+              f"(and/or --mu_scale), or use --target_perplexity to temper.", flush=True)
+    print(f"  reg* = {ms['reg_star']:.6e}  (A={ms['A']:.4g}, B={ms['B']:.4g}, N={ms['N']})")
+    _regions = "2-region (RPS + uniform rest)" if args.eps2 <= args.eps1 + 1e-12 else "3-region (RPS/L1/complement)"
+    print(f"  proposal: bucket eps1={args.eps1} eps2={args.eps2}  -> {_regions}")
 
-    S, L1 = build_seed_buckets(log_pi, neigh, deg, args.k)
-    print(f"  seed set |S|={len(S)}  |L1(S)\\S|={len(L1)}  complement={P-len(S)-len(L1)}")
+    # For each Rashomon threshold theta_gap: RPS via RAggregate(reg*), build the
+    # seed proposal from it, and record its exact chi^2 to the posterior.
+    print("\nBuilding RPS + proposal per Rashomon threshold (RAggregate reg*) ...")
+    p0s, chi2s, rps_size, theta_RA = {}, {}, {}, {}
+    for th in theta_gaps:
+        S, L1, th_RA = rps_via_raggregate(ms, th)
+        p0 = make_p0_bucket(S, L1, log_pi, P, args.eps1, args.eps2)
+        p0s[th] = p0
+        chi2s[th] = chi2_divergence(log_pi, p0)
+        rps_size[th] = len(S)
+        theta_RA[th] = th_RA
+        print(f"  theta_gap={th:<7g} theta_RA={th_RA:.6g} |RPS|={len(S):<6d} "
+              f"|L1|={len(L1):<6d} chi2={chi2s[th]:.3f}", flush=True)
 
-    # p0 and exact chi^2 per eps
-    p0s, chi2s = {}, {}
-    for eps in eps_list:
-        p0 = make_p0(eps, log_pi, S, L1, P)
-        p0s[eps] = p0
-        chi2s[eps] = chi2_divergence(log_pi, p0)
-
-    # sweep T x eps (averaged over reps)
-    print("\nSweeping annealing levels T for each seed strength ...")
-    ess_curve = {eps: [] for eps in eps_list}
-    for eps in eps_list:
-        log_p0 = np.log(np.maximum(p0s[eps], 1e-300))
+    # sweep T x theta (averaged over reps)
+    print("\nSweeping annealing levels T for each threshold ...")
+    ess_curve = {th: [] for th in theta_gaps}
+    for th in theta_gaps:
+        log_p0 = np.log(np.maximum(p0s[th], 1e-300))
         for T in T_grid:
             vals = [relative_ess_AIS(log_p0, log_pi, neigh, deg, T, args.n_paths,
                                      args.moves_per_level, rng,
                                      schedule_power=args.schedule_power)
                     for _ in range(args.reps)]
-            ess_curve[eps].append(float(np.mean(vals)))
-        print(f"  eps={eps:<5} chi2={chi2s[eps]:9.3f}  relESS@Tmax={ess_curve[eps][-1]:.3f}")
+            ess_curve[th].append(float(np.mean(vals)))
+        print(f"  theta={th:<7g} chi2={chi2s[th]:9.3f}  relESS@Tmax={ess_curve[th][-1]:.3f}", flush=True)
 
     # minimal T to reach the target relative ESS (linear interp between grid pts)
-    def minimal_T(eps):
-        ys = np.array(ess_curve[eps]); xs = np.array(T_grid, dtype=float)
+    def minimal_T(th):
+        ys = np.array(ess_curve[th]); xs = np.array(T_grid, dtype=float)
         hit = np.where(ys >= args.target_ess)[0]
         if len(hit) == 0:
             return np.nan
@@ -375,46 +562,45 @@ def main():
         x0, x1, y0, y1 = xs[i-1], xs[i], ys[i-1], ys[i]
         return float(x0 + (args.target_ess - y0) * (x1 - x0) / (y1 - y0)) if y1 > y0 else float(x1)
 
-    Tmin = {eps: minimal_T(eps) for eps in eps_list}
+    Tmin = {th: minimal_T(th) for th in theta_gaps}
 
     # ---- summary table ----
-    print("\n" + "=" * 60)
-    print(f"Summary (target relative ESS = {args.target_ess})")
-    print("=" * 60)
-    print(f"{'eps':>6}{'chi^2(pi||p0)':>16}{'sqrt(chi^2)':>13}{'minimal T':>12}")
-    for eps in eps_list:
-        tag = "  (uniform)" if abs(eps - 1.0) < 1e-9 else ""
-        print(f"{eps:>6}{chi2s[eps]:>16.3f}{math.sqrt(chi2s[eps]):>13.3f}{Tmin[eps]:>12.2f}{tag}")
+    print("\n" + "=" * 82)
+    print(f"Summary (target relative ESS = {args.target_ess}) | reg*={ms['reg_star']:.4e}, A*N={ms['A']*ms['N']:.1f}")
+    print("=" * 82)
+    print(f"{'theta_gap':>10}{'theta_RA':>14}{'|RPS|':>7}{'chi^2':>12}{'sqrt(chi^2)':>13}{'minimal T':>12}")
+    for th in theta_gaps:
+        print(f"{th:>10g}{theta_RA[th]:>14.6g}{rps_size[th]:>7d}"
+              f"{chi2s[th]:>12.3f}{math.sqrt(chi2s[th]):>13.3f}{Tmin[th]:>12.2f}")
 
     # ---- figure 1: relative ESS vs T ----
-    colors = plt.cm.viridis(np.linspace(0, 0.9, len(eps_list)))
+    colors = plt.cm.viridis(np.linspace(0, 0.9, len(theta_gaps)))
     fig, ax = plt.subplots(figsize=(7.2, 5))
-    for eps, c in zip(eps_list, colors):
-        lbl = f"eps={eps} (uniform)" if abs(eps - 1.0) < 1e-9 else f"eps={eps}  (chi2={chi2s[eps]:.1f})"
-        ax.plot(T_grid, ess_curve[eps], "-o", color=c, ms=4, lw=1.6, label=lbl)
+    for th, c in zip(theta_gaps, colors):
+        ax.plot(T_grid, ess_curve[th], "-o", color=c, ms=4, lw=1.6,
+                label=f"theta={th:g}  (|RPS|={rps_size[th]}, chi2={chi2s[th]:.1f})")
     ax.axhline(args.target_ess, color="k", ls="--", lw=1.1, alpha=0.7,
                label=f"target relESS={args.target_ess}")
     ax.set_xscale("log", base=2)
     ax.set_xlabel("annealing levels  T")
     ax.set_ylabel("relative ESS")
     ax.set_ylim(0, 1.02)
-    ax.set_title("AIS efficiency vs seed quality  (64-partition space)")
+    ax.set_title(f"AIS efficiency vs Rashomon threshold  (scenario {args.scenario}, {P}-partition space)")
     ax.grid(alpha=0.3, ls=":")
-    ax.legend(fontsize=8, loc="lower right")
+    ax.legend(fontsize=7, loc="lower right")
     fig.tight_layout()
-    f1 = os.path.join(args.outdir, "sim_efficiency_ess_vs_T.png")
+    f1 = os.path.join(args.outdir, f"sim_efficiency_s{args.scenario}_ess_vs_T.png")
     fig.savefig(f1, dpi=150, bbox_inches="tight")
 
     # ---- figure 2: minimal T vs sqrt(chi^2) ----
-    xs = np.array([math.sqrt(chi2s[e]) for e in eps_list])
-    ys = np.array([Tmin[e] for e in eps_list])
+    xs = np.array([math.sqrt(chi2s[t]) for t in theta_gaps])
+    ys = np.array([Tmin[t] for t in theta_gaps])
     good = np.isfinite(ys)
     fig2, ax2 = plt.subplots(figsize=(6.4, 5))
-    ax2.scatter(xs[good], ys[good], c=plt.cm.viridis(np.linspace(0, 0.9, len(eps_list)))[good],
-                s=70, edgecolor="k", zorder=5)
-    for e, x, yv in zip(eps_list, xs, ys):
+    ax2.scatter(xs[good], ys[good], c=colors[good], s=70, edgecolor="k", zorder=5)
+    for t, x, yv in zip(theta_gaps, xs, ys):
         if np.isfinite(yv):
-            ax2.annotate(f"eps={e}", (x, yv), textcoords="offset points",
+            ax2.annotate(f"θ={t:g}", (x, yv), textcoords="offset points",
                          xytext=(6, 4), fontsize=8)
     if good.sum() >= 2:
         b, a = np.polyfit(xs[good], ys[good], 1)
@@ -425,10 +611,10 @@ def main():
         ax2.legend(fontsize=9)
     ax2.set_xlabel(r"$\sqrt{\chi^2(\pi \,\|\, p_0)}$")
     ax2.set_ylabel(f"minimal T for relESS $\\geq$ {args.target_ess}")
-    ax2.set_title("Minimal annealing length scales with $\\sqrt{\\chi^2}$")
+    ax2.set_title(f"Minimal annealing length scales with $\\sqrt{{\\chi^2}}$  (scenario {args.scenario})")
     ax2.grid(alpha=0.3, ls=":")
     fig2.tight_layout()
-    f2 = os.path.join(args.outdir, "sim_efficiency_Tmin_vs_chi.png")
+    f2 = os.path.join(args.outdir, f"sim_efficiency_s{args.scenario}_Tmin_vs_chi.png")
     fig2.savefig(f2, dpi=150, bbox_inches="tight")
 
     print(f"\nSaved figures:\n  {f1}\n  {f2}")
