@@ -1077,22 +1077,33 @@ def run_ais_state_streaming_from_custom_states(
     R,
     eps1,
     eps2,
-    score_s,
-    cfg,
-    out_dir,
+    score_s=None,
+    cfg=None,
+    out_dir=None,
     label: str = "custom",  # used in output filename
+    log_score_s=None,   # PREFERRED: log-posterior score (log-space, no exp/clamp)
 ) -> Dict[str, List[Any]]:
     """
     AIS seeded from an arbitrary set of states with associated log-scores.
     Identical annealing logic as run_ais_state_streaming_from_data but
     bypasses RAggregate — use for SSS-seeded AIS or any custom warm start.
+
+    Pass log_score_s (preferred): the annealing target and the MH acceptance are
+    evaluated in LOG space, so a g-prior score of exp(-9000) does not underflow.
+    If only score_s (a probability) is given we fall back to the old
+    log(max(1e-300, score_s)) which UNDERFLOWS/clamps for the g-prior — avoid.
     """
+    if log_score_s is None:
+        if score_s is None:
+            raise ValueError("Provide log_score_s (preferred) or score_s.")
+        log_score_s = lambda z: math.log(max(1e-300, score_s(z)))
+
     buckets = make_p0_buckets_weighted_S0(
         init_states, np.asarray(R, int), init_log_alpha,
         eps1=eps1, eps2=eps2, min_len=cfg.min_len,
     )
     log_p0 = partial(log_p0_distance_weighted_S0_wrapper, buckets=buckets)
- 
+
     terminals = []; logw = np.zeros(cfg.n_paths, float)
 
     os.makedirs(out_dir, exist_ok=True)
@@ -1110,11 +1121,11 @@ def run_ais_state_streaming_from_custom_states(
             beta_prev = ladder[0]
             for beta_cur in ladder[1:]:
                 lq  = log_p0(x)
-                lp  = math.log(max(1e-300, score_s(x)))
+                lp  = log_score_s(x)                       # log-space, no clamp
                 lw += (beta_cur - beta_prev) * (lp - lq)
                 for _ in range(cfg.moves_per_level):
                     x = mh_step_state_uniform_neighbors(
-                        x, beta_cur, log_p0, score_s, min_len=cfg.min_len)
+                        x, beta_cur, log_p0, log_score_s, min_len=cfg.min_len)
                 beta_prev = beta_cur
 
             rec = {"iter": p, "state": MCMC._state_to_jsonable(x),

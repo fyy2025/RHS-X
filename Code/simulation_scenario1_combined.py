@@ -10,7 +10,7 @@ from rashomon import hasse, extract_pools, loss, aggregate, AIS, MCMC
 
 
 # ---------------------------------------------------------------------------
-# Scenario 2 — ALL methods in a SINGLE pkl per epoch:
+# Scenario 1 — ALL methods in a SINGLE pkl per epoch:
 #
 #     MCMC               : gold-standard posterior sample (the reference)
 #     RPS                : Rashomon partition set (reference set)
@@ -59,7 +59,7 @@ def _sample_random_seed_states(n_seeds, M, R, profiles, log_score_s, base_seed):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Scenario 2 — MCMC + RPS + AIS(RPS) + AIS(random) + PAC-Bayes, all log-space")
+        description="Scenario 1 — MCMC + RPS + AIS(RPS) + AIS(random) + PAC-Bayes, all log-space")
     parser.add_argument("--epoch",        type=int,   required=True)
     parser.add_argument("--eps1",         type=float, default=0.4)
     parser.add_argument("--eps2",         type=float, default=0.7)
@@ -71,7 +71,7 @@ def main():
     parser.add_argument("--pb_delta",     type=float, default=0.05)
     parser.add_argument("--frontier_cap", type=int,   default=500)
     parser.add_argument("--thetas",       type=str,
-                        default="1.018,1.02,1.022,1.024,1.026",
+                        default="1.02,1.03,1.04,1.05,1.06",
                         help="Comma-separated g-prior theta_RA thresholds for the RPS")
     args = parser.parse_args()
 
@@ -87,7 +87,7 @@ def main():
     print(f"Epoch {epoch} | eps1={eps1} eps2={eps2} | n_ladder={n_ladder} | "
           f"PB steps={pb_steps} | thetas={thetas}")
 
-    os.makedirs("/mmfs1/gscratch/escience/span18/output/RHS-X/output2_combined", exist_ok=True)
+    os.makedirs("/mmfs1/gscratch/escience/span18/output/RHS-X/output1_combined", exist_ok=True)
 
     # ── AIS / MCMC hyper-parameters ─────────────────────────────────────────
     n_paths          = 300
@@ -97,14 +97,14 @@ def main():
     N_ITER           = 50000    # MCMC steps
     N_BURN           = 20000
     N_THIN           = 10
-    n_prior          = 65536    # PAC-Bayes prior support size
+    n_prior          = 64    # PAC-Bayes prior support size
 
     num_samples_per_feature = 500
     lamb = 1
 
     # ── Problem structure ───────────────────────────────────────────────────
-    M = 3
-    R = np.array([4, 3, 3])
+    M = 2
+    R = np.array([4, 3])
 
     profiles, profile_map = hasse.enumerate_profiles(M)
     all_policies  = hasse.enumerate_policies(M, R)
@@ -112,52 +112,29 @@ def main():
 
     g = num_policies * num_samples_per_feature  # g = n (unit information prior)
 
-    # Profile (0, 0, 0)
-    sigma_000 = None
-    mu_000    = np.array([0])
-    var_000   = np.array([1])
+    # Profile (0, 0)
+    sigma_00 = None
+    mu_00    = np.array([0])
+    var_00   = np.array([1])
 
-    # Profile (0, 0, 1)
-    sigma_001 = np.array([[1]])
-    mu_001    = np.array([-2])
-    var_001   = np.array([1])
+    # Profile (0, 1)
+    sigma_01 = np.array([[1]])
+    mu_01    = np.array([-1])
+    var_01   = np.array([1])
 
-    # Profile (0, 1, 0)
-    sigma_010 = np.array([[1]])
-    mu_010    = np.array([-1.5])
-    var_010   = np.array([1])
+    # Profile (1, 0)
+    sigma_10 = np.array([[1, 0]])
+    mu_10    = np.array([-2, -3])
+    var_10   = np.array([1, 1])
 
-    # Profile (0, 1, 1)
-    sigma_011 = np.array([[1], [0]])
-    mu_011    = np.array([-1, 2])
-    var_011   = np.array([1, 1])
+    # Profile (1, 1)
+    sigma_11 = np.array([[0, 1], [0, np.inf]])
+    mu_11    = np.array([2, 3, -1, 1])
+    var_11   = np.array([1, 1, 1, 1])
 
-    # Profile (1, 0, 0)
-    sigma_100 = np.array([[0, 1]])
-    mu_100    = np.array([-1.5, 1])
-    var_100   = np.array([1, 1])
-
-    # Profile (1, 0, 1)
-    sigma_101 = np.array([[0, 1], [0, np.inf]])
-    mu_101    = np.array([-0.5, 2.5, 1.5, -2.5])
-    var_101   = np.array([1, 1, 1, 1])
-
-    # Profile (1, 1, 0)
-    sigma_110 = np.array([[0, 1], [1, np.inf]])
-    mu_110    = np.array([0, -2.5])
-    var_110   = np.array([1, 1])
-
-    # Profile (1, 1, 1)
-    sigma_111 = np.array([[0, 1], [1, np.inf], [0, np.inf]])
-    mu_111    = np.array([3, -0.5, -1.5, -2])
-    var_111   = np.array([1, 1, 1, 1])
-
-    sigma = [sigma_000, sigma_001, sigma_010, sigma_011,
-             sigma_100, sigma_101, sigma_110, sigma_111]
-    mu    = [mu_000,    mu_001,    mu_010,    mu_011,
-             mu_100,    mu_101,    mu_110,    mu_111]
-    var   = [var_000,   var_001,   var_010,   var_011,
-             var_100,   var_101,   var_110,   var_111]
+    sigma = [sigma_00, sigma_01, sigma_10, sigma_11]
+    mu    = [mu_00,    mu_01,    mu_10,    mu_11]
+    var   = [var_00,   var_01,   var_10,   var_11]
 
     policies_profiles        = {}
     policies_profiles_masked = {}
@@ -259,11 +236,11 @@ def main():
         MCMC.run_mcmc_streaming_rand_start(
             profiles=profiles, M=M, R=R, log_score_s=log_score_s,
             seed=None, steps=N_ITER, burnin=N_BURN, thin=N_THIN, min_len=1,
-            out_jsonl=f"/mmfs1/gscratch/escience/span18/output/RHS-X/output2_combined/mcmc_samples_epoch{epoch}_iter{iter}.jsonl",
-            progress_json=f"/mmfs1/gscratch/escience/span18/output/RHS-X/output2_combined/mcmc_progress_epoch{epoch}_iter{iter}.json",
+            out_jsonl=f"/mmfs1/gscratch/escience/span18/output/RHS-X/output1_combined/mcmc_samples_epoch{epoch}_iter{iter}.jsonl",
+            progress_json=f"/mmfs1/gscratch/escience/span18/output/RHS-X/output1_combined/mcmc_progress_epoch{epoch}_iter{iter}.json",
         )
         mcmc_res     = MCMC.load_mcmc_res_from_jsonl(
-            f"/mmfs1/gscratch/escience/span18/output/RHS-X/output2_combined/mcmc_samples_epoch{epoch}_iter{iter}.jsonl")
+            f"/mmfs1/gscratch/escience/span18/output/RHS-X/output1_combined/mcmc_samples_epoch{epoch}_iter{iter}.jsonl")
         log_weight   = np.log(
             np.repeat(1.0 / len(mcmc_res["samples"]), len(mcmc_res["samples"])))
         MCMC_post_mean = MCMC.policy_means_matrix_from_mcmc(
@@ -308,7 +285,7 @@ def main():
                 ladder=ladder,
                 init_states=RPS_states, init_log_alpha=log_alpha,
                 R=R, eps1=eps1, eps2=eps2, log_score_s=log_score_s, cfg=cfg,
-                out_dir="/mmfs1/gscratch/escience/span18/output/RHS-X/output2_combined",
+                out_dir="/mmfs1/gscratch/escience/span18/output/RHS-X/output1_combined",
                 label=f"RPS_{theta:g}",
             )
             AIS_post_mean = AIS.estimate_policy_means_from_ais(
@@ -335,7 +312,7 @@ def main():
                 ladder=ladder,
                 init_states=rand_states, init_log_alpha=rand_log_scores,
                 R=R, eps1=eps1, eps2=eps2, log_score_s=log_score_s, cfg=cfg,
-                out_dir="/mmfs1/gscratch/escience/span18/output/RHS-X/output2_combined",
+                out_dir="/mmfs1/gscratch/escience/span18/output/RHS-X/output1_combined",
                 label=f"RAND_{theta:g}",
             )
             AIS_rand_post_mean = AIS.estimate_policy_means_from_ais(
@@ -378,7 +355,7 @@ def main():
 
         overall_result.append(result)
 
-    out_path = f"/mmfs1/gscratch/escience/span18/output/RHS-X/output2_combined/sim2_combined_result{epoch}.pkl"
+    out_path = f"/mmfs1/gscratch/escience/span18/output/RHS-X/output1_combined/sim1_combined_result{epoch}.pkl"
     with open(out_path, "wb") as f:
         pickle.dump(overall_result, f)
     print(f"Saved epoch {epoch} → {out_path}")
