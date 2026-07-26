@@ -225,10 +225,14 @@ def make_p0_buckets_weighted_S0(RPS: List[State],
                                 eps1: float = 0.6,
                                 eps2: float = 0.85,
                                 min_len: int = 1) -> P0BucketsWeightedS0:
-    # S0: RPS signatures
+    # S0: RPS signatures. Compute the normalised S0 log-probs via LOG-softmax so
+    # a wide log_alpha range (the g-prior spans hundreds of nats) never underflows
+    # a weight to exactly 0 and hits math.log(0). log_softmax = z - logsumexp(z).
     S0_sigs = [state_signature(s) for s in RPS]
-    p_rps = _softmax_logalpha(log_alpha)
-    S0_logprob = {sig: math.log(p_rps[i]) for i, sig in enumerate(S0_sigs)}
+    _z = np.asarray(log_alpha, dtype=float)
+    _m = float(np.max(_z))
+    _logZ = _m + math.log(float(np.sum(np.exp(_z - _m))))
+    S0_logprob = {sig: float(_z[i] - _logZ) for i, sig in enumerate(S0_sigs)}
 
     # S1: union of 1-edit neighbors (unique), excluding S0
     S0_set = set(S0_sigs)
