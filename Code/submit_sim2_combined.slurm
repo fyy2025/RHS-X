@@ -19,7 +19,7 @@ set -euo pipefail
 EPS1=0.4
 EPS2=0.7
 N_LADDER=4
-THETAS="13.0,13.1,13.2,13.3,13.4"
+THETAS="1.018,1.02,1.022,1.024,1.026"
 
 echo "Running on $(hostname)"
 echo "Started at $(date)"
