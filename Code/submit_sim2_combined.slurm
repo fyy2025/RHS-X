@@ -28,7 +28,7 @@ echo "Parameters: EPS1=${EPS1}, EPS2=${EPS2}, N_LADDER=${N_LADDER}, THETAS=${THE
 
 cd $HOME/RHS-X/Code
 
-mkdir -p output2_combined log
+mkdir -p /mmfs1/gscratch/escience/span18/output/RHS-X/output2_combined log
 
 source venv/bin/activate
 
@@ -42,6 +42,6 @@ python simulation_scenario2_combined.py \
     --n_ladder $N_LADDER \
     --thetas "$THETAS"
 
-zip -r "results_sim2_combined_${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}.zip" output2_combined/
+zip -r "results_sim2_combined_${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}.zip" /mmfs1/gscratch/escience/span18/output/RHS-X/output2_combined/
 
 echo "Job $SLURM_JOB_ID task $SLURM_ARRAY_TASK_ID finished at $(date)."

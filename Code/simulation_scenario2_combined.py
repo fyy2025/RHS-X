@@ -77,7 +77,7 @@ def main():
     print(f"Epoch {epoch} | eps1={eps1} eps2={eps2} | "
           f"n_ladder={n_ladder} | thetas={thetas}")
 
-    os.makedirs("./output2_combined", exist_ok=True)
+    os.makedirs("/mmfs1/gscratch/escience/span18/output/RHS-X/output2_combined", exist_ok=True)
 
     # ── AIS hyper-parameters ────────────────────────────────────────────────
     n_paths          = 300
@@ -271,7 +271,7 @@ def main():
                 ladder=ladder,
                 init_states=RPS_states, init_log_alpha=log_alpha,
                 R=R, eps1=eps1, eps2=eps2, score_s=score_s, cfg=cfg,
-                out_dir="./output2_combined",
+                out_dir="/mmfs1/gscratch/escience/span18/output/RHS-X/output2_combined",
                 label=f"RPS_{theta:g}",
             )
             AIS_post_mean = AIS.estimate_policy_means_from_ais(
@@ -298,7 +298,7 @@ def main():
                 ladder=ladder,
                 init_states=rand_states, init_log_alpha=rand_log_scores,
                 R=R, eps1=eps1, eps2=eps2, score_s=score_s, cfg=cfg,
-                out_dir="./output2_combined",
+                out_dir="/mmfs1/gscratch/escience/span18/output/RHS-X/output2_combined",
                 label=f"RAND_{theta:g}",
             )
             AIS_rand_post_mean = AIS.estimate_policy_means_from_ais(
@@ -315,7 +315,7 @@ def main():
 
         overall_result.append(result)
 
-    out_path = f"./output2_combined/sim2_combined_result{epoch}.pkl"
+    out_path = f"/mmfs1/gscratch/escience/span18/output/RHS-X/output2_combined/sim2_combined_result{epoch}.pkl"
     with open(out_path, "wb") as f:
         pickle.dump(overall_result, f)
     print(f"Saved epoch {epoch} → {out_path}")
