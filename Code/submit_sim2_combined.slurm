@@ -18,13 +18,15 @@ set -euo pipefail
 # --- Simulation Parameters ---
 EPS1=0.4
 EPS2=0.7
-N_LADDER=4
-THETAS="1.018,1.02,1.022,1.024,1.026"
+N_LADDER=4    # -> 5 rungs (a beta=0 rung is prepended in the script)
+EPS_GRID="0.002,0.003,0.004,0.006,0.009"   # RELATIVE thresholds: theta = Q_min*(1+eps) per replication.
+                                     # Max |RPS| over 10 reps: 16, 37, 72, 176, 455 (all <500).
+                                     # Both conditions hold for RPS coverage 0.32-0.59.
 
 echo "Running on $(hostname)"
 echo "Started at $(date)"
 echo "Executing Array Task ID: $SLURM_ARRAY_TASK_ID"
-echo "Parameters: EPS1=${EPS1}, EPS2=${EPS2}, N_LADDER=${N_LADDER}, THETAS=${THETAS}"
+echo "Parameters: EPS1=${EPS1}, EPS2=${EPS2}, N_LADDER=${N_LADDER}, EPS_GRID=${EPS_GRID}"
 
 cd $HOME/RHS-X/Code
 
@@ -40,7 +42,7 @@ python simulation_scenario2_combined.py \
     --eps1 $EPS1 \
     --eps2 $EPS2 \
     --n_ladder $N_LADDER \
-    --thetas "$THETAS"
+    --eps "$EPS_GRID"
 
 zip -r "/mmfs1/gscratch/escience/span18/output/RHS-X/results_sim2_combined_${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}.zip" /mmfs1/gscratch/escience/span18/output/RHS-X/output2_combined/
 

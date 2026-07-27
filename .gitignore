@@ -190,3 +190,5 @@ Results/harvard_talk_april_11_pickles/*
 # Binary artifacts
 *.pkl
 *.png
+*.JSONL
+*.json
